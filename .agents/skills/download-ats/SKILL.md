@@ -14,6 +14,32 @@ Treat "download ats-ecosim" and obvious spelling variants as a request for the
 complete workflow below: download both ATS and EcoSIM with recursive submodules.
 Do not stop after downloading only one repository.
 
+## Select the execution environment
+
+Honor an explicitly requested Docker container first. Otherwise check the
+workspace's `.docker/container.json` written by `run_docker.sh`. Parse it as
+data and inspect the full ID in its recorded Docker context. Confirm that it is
+running, its image matches the recorded image identity, and its writable
+`/ats-helper` mount points to this workspace. Check `/ats-build` is the expected
+build volume when downloading in preparation for a build. The JSON state is a
+snapshot; live Docker inspection determines whether the container is usable.
+
+When a matching session is running, execute all source inspection, Git clones,
+revision selection, recursive submodule operations, and verification through
+`docker exec` in that same container, with `/ats-helper` as the working directory.
+Use `/ats-helper/repos/amanzi` and `/ats-helper/repos/ecosim` as the default
+container destinations. Also report their corresponding host paths through the
+verified bind mount. Docker orchestration and reading the session record happen
+on the host; downloads happen in the selected container.
+
+Carry the selected full container ID into a subsequent `build-ats-ecosim` task;
+do not start another container between downloading and building. If a record is
+stale or mismatched, explain that it cannot identify a usable session. For an
+explicitly requested Docker workflow, create a configured session when authorized
+or report the missing environment; do not silently fall back to host downloads.
+Without a session record or a Docker request, the host workflow below still
+applies. An explicit host-only request overrides automatic Docker reuse.
+
 ## Choose the destination and revision
 
 - Honor the user's destination. Otherwise use `repos/amanzi` under the current

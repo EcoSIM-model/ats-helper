@@ -1,1 +1,4 @@
 /repos/
+/build-logs/
+/.docker/
+__pycache__/

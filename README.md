@@ -18,6 +18,29 @@ mounted at `/ats-helper`. An architecture-specific Docker volume is mounted at
 `/ats-build` for compiled dependencies, build files, downloads, and installed ATS.
 Both persist after you exit; the container itself is removed.
 
+Docker assigns a full container ID when the launcher creates the container; the
+shell prompt normally shows its first 12 characters. Before attaching the
+terminal, the launcher prints the ID and saves a JSON record at
+`.docker/container.json`. The record includes the full ID, Docker context, image,
+architecture, workspace path, mounts, and a state snapshot. It is refreshed when
+the launcher finishes. Inspect Docker for live status before reusing the ID.
+
+Each launch also has its own record at `.docker/containers/<full-id>.json`.
+The latest record points to the most recently recorded launch, so an older
+terminal exiting cannot replace a newer session's record. These files are
+ignored by Git. After a normal exit, the stopped container is removed and its
+record is historical; detaching from a running shell leaves the container
+available for reuse. Existing terminals started before this launcher change
+do not have a generated record.
+
+The download and build skills read this record, verify the running container
+and workspace mount, and use `docker exec` with that exact full ID. If you open
+the environment first, then request "download ats-ecosim" followed by "build
+ats-ecosim", both operations run inside that container. Git downloads and source
+preparation use `/ats-helper/repos`; compiled products use `/ats-build`. An
+explicitly supplied container ID takes precedence. A stale record must be checked
+before reuse; it does not authorize silently downloading on the host instead.
+
 Use the native architecture for local development: ARM64 on Apple Silicon and
 AMD64 on x86 machines. If you specifically need an x86 Linux build:
 
@@ -78,6 +101,17 @@ Build logs and source revisions are saved inside the container volume at
 `/ats-build/logs/source-revisions.txt`. Open the environment with
 `./run_docker.sh`, then run `ats --version` or `ats --help` after installation.
 The ATS executable is `/ats-build/install/amanzi/bin/ats`.
+
+The Ubuntu 24.04 ARM64 build was verified with GCC 13.3 and CMake 3.28.3.
+The executable loads and registers `EcoSIM for ATS`. A one-day coupling check
+passed after removing the obsolete constant evaluators `surface-ecosim_source`
+and `surface-ecosim_water_source` from a copy of the upstream freeze–thaw input;
+the current PK owns these fields. The full 200-day case with the same input
+correction failed with `TimeStepManager: manually prescribed timestep failed`
+after temperatures exceeded the constitutive model's bounds. The full regression
+has not passed. Reference checkpoints and the source test input were not changed.
+Saved build and validation diagnostics are in the local, ignored `build-logs/`
+directory and the Docker volume's `/ats-build/logs` and `/ats-build/validation`.
 
 The selected ATS revision intentionally differs from the parent repository's
 recorded submodule commit. Running a parent-level
