@@ -1,0 +1,4 @@
+**
+!docker/
+!docker/ubuntu-compiler.dockerfile
+!docker/ats-env.sh
