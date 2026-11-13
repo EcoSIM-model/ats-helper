@@ -209,3 +209,8 @@ must be tested for the chosen Amanzi revision; older revisions may require
 dependency or compiler adjustments. Consult the checked-out
 [`INSTALL_ATS.md`](https://github.com/amanzi/amanzi/blob/master/INSTALL_ATS.md)
 and build logs when diagnosing failures.
+
+## License
+
+ATS helper is licensed under the [BSD 3-Clause License](LICENSE).
+Downloaded Amanzi, ATS, EcoSIM, and other dependencies retain their own licenses.
