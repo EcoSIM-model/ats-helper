@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A source-based guide to the ATS–EcoSIM calling sequence, timestep coupling, and state exchanges.">
+  <title>ATS–EcoSIM · Calling sequence</title>
+  <style>
+    :root{color-scheme:light;--paper:#f5f4ef;--card:#fff;--ink:#182c35;--muted:#52646b;--line:#dce2de;--teal:#006c62;--soft:#e9f3ef;--amber:#805317;--amber-bg:#fff5e1;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:82px}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65}a{color:var(--teal);text-underline-offset:3px}a:hover{text-decoration-thickness:2px}a:focus-visible{outline:3px solid var(--teal);outline-offset:4px}code,pre{font-family:var(--mono)}code{font-size:.86em;overflow-wrap:anywhere}p{margin:0 0 1rem}h1,h2,h3{line-height:1.2;letter-spacing:-.035em}h1{font-size:clamp(2.6rem,6vw,4.6rem);max-width:850px;margin:18px 0 24px}h2{font-size:clamp(1.65rem,3vw,2.25rem);margin:0 0 20px}h3{font-size:1.1rem;margin:0 0 12px;letter-spacing:-.015em}.wrap{max-width:1180px;margin:auto;padding:0 36px}.skip{position:absolute;top:-60px;left:16px;z-index:10;background:white;padding:12px}.skip:focus{top:12px}.topbar{position:sticky;top:0;z-index:2;border-bottom:1px solid var(--line);background:#f5f4eff5;backdrop-filter:blur(12px)}.topbar .wrap{display:flex;align-items:center;justify-content:space-between;gap:24px;min-height:65px}.brand{font-size:.85rem;font-weight:750;letter-spacing:.08em;white-space:nowrap}.brand span{color:var(--teal)}nav{display:flex;gap:22px;flex-wrap:wrap}nav a{font-size:.82rem;color:var(--muted);text-decoration:none}.hero{padding:72px 0 36px}.eyebrow{text-transform:uppercase;font-size:.76rem;letter-spacing:.14em;font-weight:750;color:var(--teal)}.lead{font-size:1.18rem;max-width:850px;color:var(--muted)}.revision-bar{display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 0}.pill{font-size:.8rem;padding:8px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card)}.pill strong{margin-right:7px}.section{padding:36px 0;border-top:1px solid var(--line)}.section-heading{display:flex;gap:18px;align-items:baseline}.section-no{font-family:var(--mono);font-size:.82rem;color:var(--teal)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:26px}.card p:last-child{margin-bottom:0}.muted{color:var(--muted)}.small{font-size:.86rem}.callout{background:var(--soft);border-left:4px solid var(--teal);padding:20px 24px;border-radius:0 8px 8px 0;margin:24px 0}.callout p:last-child{margin:0}.warning{background:var(--amber-bg);border-left-color:var(--amber)}.source-link{font-size:.79rem;display:inline-block;margin-top:8px}pre{background:#132a33;color:#e2f0ee;padding:25px 28px;border-radius:9px;font-size:.82rem;line-height:1.85;overflow:auto;white-space:pre;tab-size:2;margin:18px 0}.code-label{font:700 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:20px}.pipeline{list-style:none;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin:25px 0}.pipeline li{position:relative;background:var(--card);border:1px solid var(--line);border-top:3px solid var(--teal);border-radius:7px;padding:22px}.pipeline li:not(:last-child)::after{content:"→";position:absolute;right:-16px;top:50%;transform:translateY(-50%);color:var(--teal);font-size:1.2rem}.pipeline span{display:block;font:700 .7rem var(--mono);letter-spacing:.08em;color:var(--teal);margin-bottom:10px}.pipeline strong{display:block;line-height:1.35;margin-bottom:8px}.pipeline p{font-size:.84rem;color:var(--muted);margin:0}.table-scroll{overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--card)}table{border-collapse:collapse;width:100%;font-size:.88rem}th,td{text-align:left;vertical-align:top;padding:17px 20px;border-bottom:1px solid var(--line)}th{background:#edf1ec;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em}tr:last-child td{border-bottom:0}td:first-child{font-weight:650;min-width:145px}td code{display:inline-block;margin:2px 0}.steps{padding-left:22px}.steps li{padding-left:8px;margin-bottom:15px}.sources{padding-left:21px;margin:0}.sources li{margin-bottom:13px}.sources small{display:block;color:var(--muted)}footer{padding:32px 0 50px;font-size:.8rem;color:var(--muted)}.tag{font:700 .7rem var(--mono);padding:4px 7px;border-radius:4px;background:var(--soft);color:var(--teal);display:inline-block;margin-bottom:12px}.tag.amber{background:var(--amber-bg);color:var(--amber)}
+    @media(max-width:850px){.pipeline{grid-template-columns:1fr 1fr}.pipeline li:nth-child(2)::after{display:none}.topbar .wrap{align-items:flex-start;flex-direction:column;gap:8px;padding-top:14px;padding-bottom:14px}nav{gap:14px}.hero{padding-top:44px}}
+    @media(max-width:600px){.wrap{padding-left:20px;padding-right:20px}.grid,.pipeline{grid-template-columns:1fr}.pipeline li:not(:last-child)::after{content:"↓";top:auto;right:50%;bottom:-23px;transform:translateX(50%)}.pipeline li:nth-child(2)::after{display:block}.card{padding:21px}pre{padding:20px;font-size:.74rem}.section{padding:28px 0}th,td{padding:14px}nav{gap:12px}nav a{font-size:.74rem}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+    @media print{body{background:#fff;font-size:10pt}.wrap{max-width:none;padding:0}.topbar,.skip{display:none}.hero{padding:0 0 20px}h1{font-size:30pt}.section{padding:20px 0}.card,.callout,.pipeline li{break-inside:avoid}pre{background:#f0f3f2;color:#132a33;border:1px solid #cbd5d1;white-space:pre-wrap;overflow-wrap:anywhere}a{color:#00564c}footer{padding-bottom:0}}
+  </style>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand">ATS <span>↔</span> ECOSIM KNOWLEDGE</div>
+      <nav aria-label="Report sections">
+        <a href="#overview">Overview</a><a href="#initialization">Initialization</a><a href="#timestep">Timestep</a><a href="#exchange">Data exchange</a><a href="#notes">Notes</a><a href="#sources">Sources</a>
+      </nav>
+    </div>
+  </header>
+  <main id="content" class="wrap">
+    <section class="hero" id="overview" aria-labelledby="title">
+      <div class="eyebrow">Source trace · November 13, 2026</div>
+      <h1>How ATS calls EcoSIM</h1>
+      <p class="lead">ATS owns the simulation clock and multiprocess coordination. Its EcoSIM process kernel exchanges column data with a linked Fortran library, then publishes EcoSIM’s water and energy feedback into ATS state.</p>
+      <div class="revision-bar" aria-label="Source revisions examined">
+        <span class="pill"><strong>ATS</strong><code>07f491d6</code></span>
+        <span class="pill"><strong>EcoSIM</strong><code>fe3afa72</code></span>
+        <span class="pill"><strong>Coupling example</strong>200-day freeze–thaw input</span>
+      </div>
+      <ol class="pipeline" aria-label="Four main layers of the coupling">
+        <li><span>01 / CONTROL</span><strong>ATS coordinator</strong><p>Advances the PK tree and commits accepted timesteps.</p></li>
+        <li><span>02 / ADAPTER</span><strong>EcoSIM PK + EcoEngine</strong><p>Maps ATS fields into C-compatible exchange buffers.</p></li>
+        <li><span>03 / COMPUTE</span><strong>Fortran EcoSIM</strong><p>Runs the coupled surface-balance pathway and its internal substeps.</p></li>
+        <li><span>04 / FEEDBACK</span><strong>ATS source fields</strong><p>Receive fluxes, snow state, and carried internal state.</p></li>
+      </ol>
+      <div class="callout"><p><strong>Runtime architecture:</strong> EcoSIM executes inside the ATS process through linked C/Fortran interfaces. Data exchange is organized by vertical soil columns.</p></div>
+    </section>
+
+    <section class="section" id="initialization" aria-labelledby="initialization-title">
+      <div class="section-heading"><span class="section-no">01</span><h2 id="initialization-title">Create and initialize the EcoSIM PK</h2></div>
+      <div class="grid">
+        <article class="card">
+          <h3>ATS selects the process kernel</h3>
+          <p>The XML PK tree identifies <code>"EcoSIM for ATS"</code>. ATS’s PK factory constructs the C++ <code>Amanzi::EcoSIM::EcoSIM</code> class. Its constructor reads configuration and creates an <code>EcoEngine</code>.</p>
+          <p><code>CreateEcoInterface()</code> connects the engine’s function table to <code>ecosim_setup</code>, <code>ecosim_advance</code>, and <code>ecosim_shutdown</code>.</p>
+          <a class="source-link" href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface_reg.hh#L14">PK registration ↗</a>
+          <a class="source-link" href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/data/EcoContainers.cc#L36">Interface function table ↗</a>
+        </article>
+        <article class="card">
+          <h3>Declare fields and allocate buffers</h3>
+          <p><code>Setup()</code> obtains the surface/subsurface meshes, declares field dependencies, registers EcoSIM-owned source terms, and defines ATS records for EcoSIM’s internal-state layout.</p>
+          <p><code>Initialize()</code> allocates environment, feedback, and internal-state buffers. <code>InitializeSingleProcess()</code> checks that C++ and Fortran agree on container sizes before invoking setup.</p>
+          <a class="source-link" href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc#L236">Setup and field ownership ↗</a>
+        </article>
+      </div>
+      <div class="code-label">Initialization call chain</div>
+      <pre aria-label="Initialization call chain">EcoSIM::Initialize()
+  → InitializeSingleProcess()
+    → CheckContainerSizes()
+    → CopyConfigToEcoSIM_() + CopyToEcoSIM_process()
+    → EcoEngine::Setup()
+      → ecosim_setup()                    [Fortran BIND(C)]
+        → ATS2EcoSIMData(..., config)
+        → Init_EcoSIM()
+          → InitSharedData()
+          → Init_EcoSIM_Soil()
+        → PackInternalState()
+    → CopyInternalStateFromEcoSIM_()</pre>
+      <p class="small muted">Configuration is copied at setup. Environment and feedback buffers are also exchanged during subsequent advances. <a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ecosim_wrappers.F90#L44">Fortran setup wrapper ↗</a></p>
+    </section>
+
+    <section class="section" id="timestep" aria-labelledby="timestep-title">
+      <div class="section-heading"><span class="section-no">02</span><h2 id="timestep-title">Advance ATS, then call EcoSIM when due</h2></div>
+      <p>The freeze–thaw example uses a <strong>weak MPC</strong> with this configured order: <strong>permafrost surface/subsurface hydrology and energy → EcoSIM</strong>. The weak coupler advances its child PKs sequentially and returns failure if a child fails. Other inputs can choose a different coupler or order.</p>
+      <div class="code-label">Timestep call chain for this input</div>
+      <pre aria-label="ATS to EcoSIM timestep calling sequence">ATSDriver::cycle_driver()
+  → Coordinator::advance()
+    → WeakMPC::AdvanceStep()
+      ├─ ATS hydrology / energy PKs
+      └─ EcoSIM::AdvanceStep(t_old, t_new)
+          → Update ATS field evaluators
+          → AdvanceSingleProcess(dt, rank)
+              │
+              └─ if current_time − last_ecosim_time ≥ 3600 seconds:
+                   → CopyToEcoSIM_process()
+                   → EcoEngine::Advance()
+                     → ecosim_advance()   [Fortran BIND(C)]
+                       → ATS2EcoSIMData()
+                       → UnpackInternalState()
+                       → Run_EcoSIM_one_step()
+                         → SurfaceEBalance()
+                           → RunEcoSIMSurfaceBalance()
+                       → EcoSIM2ATSData()
+                       → PackInternalState()
+                   → CopyFromEcoSIM_process()
+                   → Update last_ecosim_time
+    → CommitStep() on an accepted ATS timestep</pre>
+      <div class="grid">
+        <article class="card">
+          <span class="tag">TIMING</span><h3>An hourly gate inside the PK</h3>
+          <p>ATS can take smaller timesteps. The interface makes the actual EcoSIM advance call only when <code>current_time − last_ecosim_time ≥ 3600</code>. Previously published source terms remain available between calls.</p>
+          <p>With hydrology/energy first in this weak-coupling order, the new EcoSIM sources become available for the next hydrology/energy advance.</p>
+          <a class="source-link" href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc#L1471">AdvanceSingleProcess ↗</a>
+        </article>
+        <article class="card">
+          <span class="tag">FORTRAN STEP</span><h3>Surface balance with internal substeps</h3>
+          <p><code>RunEcoSIMSurfaceBalance()</code> prepares weather, radiation and precipitation; stages the surface physics; then calls <code>RunSurfacePhysModelM()</code> in an <code>M = 1…NPH</code> loop.</p>
+          <p>It accumulates fluxes, updates surface and snow state, and invokes canopy/root plant processes when enabled.</p>
+          <a class="source-link" href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSEcoSIMAdvanceMod.F90#L474">Surface physics and subcycling ↗</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="exchange" aria-labelledby="exchange-title">
+      <div class="section-heading"><span class="section-no">03</span><h2 id="exchange-title">What crosses the interface</h2></div>
+      <p><code>EcoConfig</code>, <code>EcoEnvironment</code>, <code>EcoFeedback</code>, <code>EcoInternalState</code>, and <code>EcoSizes</code> form the exchange interface. C++ packs column arrays; Fortran accesses the C-compatible buffers and maps their data into EcoSIM variables.</p>
+      <div class="table-scroll">
+        <table>
+          <caption class="small" style="text-align:left;padding:15px 20px;color:var(--muted)">Primary exchanges observed in the checked revisions</caption>
+          <thead><tr><th scope="col">Direction</th><th scope="col">Data</th><th scope="col">Role</th></tr></thead>
+          <tbody>
+            <tr><td>ATS → EcoSIM</td><td>Soil temperature, water content and saturation, porosity, capillary pressure, densities, thermal/hydraulic properties</td><td>Supply the soil state and properties used by EcoSIM.</td></tr>
+            <tr><td>ATS → EcoSIM</td><td>Column geometry, layer thickness/depth, cell volume and column area</td><td>Map the ATS mesh to EcoSIM’s column representation.</td></tr>
+            <tr><td>ATS → EcoSIM</td><td>Radiation, air temperature, vapor pressure, wind, precipitation, vegetation descriptors and calendar</td><td>Provide environmental forcing and run context.</td></tr>
+            <tr><td>EcoSIM → ATS</td><td><code>surface-ecosim_source</code><br><code>surface-ecosim_water_source</code></td><td>Publish surface energy and water feedback. C++ converts hourly quantities by dividing by 3600.</td></tr>
+            <tr><td>EcoSIM → ATS</td><td><code>subsurface_ecosim_water_source</code></td><td>Publish root-water exchange, mapped from columns to ATS cells and converted using molar density and cell volume.</td></tr>
+            <tr><td>EcoSIM → ATS</td><td><code>surface-snow_depth</code><br><code>surface-canopy_snow</code></td><td>Return snow and canopy-snow state.</td></tr>
+            <tr><td>Both directions</td><td>EcoSIM carried internal state, plus derived outputs</td><td>Restore carried state before an advance and publish updated state afterward. Private carried entries participate in ATS checkpoint/restart.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted" style="margin-top:15px"><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc#L1030">ATS → EcoSIM packing ↗</a> · <a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSCPLMod.F90#L17">Fortran buffer mapping ↗</a> · <a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc#L1275">Feedback publication and unit conversions ↗</a></p>
+    </section>
+
+    <section class="section" aria-labelledby="state-title">
+      <div class="section-heading"><span class="section-no">04</span><h2 id="state-title">Commit, checkpoint and restart</h2></div>
+      <ol class="steps">
+        <li><strong>Publish feedback.</strong> <code>CopyFromEcoSIM_process()</code> writes the returned fields and marks EcoSIM’s primary source evaluators as changed, allowing dependent ATS evaluators to recompute.</li>
+        <li><strong>Keep EcoSIM state in ATS.</strong> <code>CopyInternalStateFromEcoSIM_()</code> writes the packed state into ATS records. Before a subsequent advance, those records are copied back and Fortran calls <code>UnpackInternalState()</code>.</li>
+        <li><strong>Commit an accepted step.</strong> The coordinator calls the PK tree’s <code>CommitStep()</code>. EcoSIM’s implementation records the accepted time in <code>saved_time_</code>.</li>
+        <li><strong>Check restart compatibility.</strong> The PK declares private carried-state records for checkpointing and checks their layout version against the EcoSIM library before advancing. Output-only entries are excluded from checkpoint storage.</li>
+      </ol>
+      <p class="small"><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/executables/coordinator.cc#L554">Coordinator acceptance/commit path ↗</a> · <a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSStateRegistryMod.F90#L288">Fortran state packing ↗</a></p>
+    </section>
+
+    <section class="section" id="notes" aria-labelledby="notes-title">
+      <div class="section-heading"><span class="section-no">05</span><h2 id="notes-title">Details that affect interpretation</h2></div>
+      <div class="grid">
+        <article class="card"><h3>The coupled driver’s scope</h3><p>The traced Fortran entry point calls <code>SurfaceEBalance()</code>. This path performs surface energy/water and snow calculations, with plant processes when enabled. ATS continues to advance the hydrology and soil-energy PKs configured in the input.</p></article>
+        <article class="card"><h3>EcoSIM owns its source fields</h3><p>The PK registers returned source terms as primary variables. An input that also defines constant evaluators for those same keys is rejected. This explains the two obsolete evaluator definitions removed from the copied freeze–thaw validation input.</p></article>
+      </div>
+      <div class="callout warning"><p><strong>Subsurface energy copy-back is disabled in this revision.</strong> The interface declares a subsurface energy-source field, but the C++ assignment that copies its column values back into ATS is commented out. Surface energy feedback and subsurface water feedback are actively published. <a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc#L1361">Inspect the copy-back code ↗</a></p></div>
+      <p class="small muted"><strong>Runtime evidence from this workspace:</strong> EcoSIM PK registration, two-rank MPI startup, and an adapted one-day coupling run passed. The adapted full 200-day case stopped with <code>TimeStepManager: manually prescribed timestep failed</code> after temperatures exceeded the constitutive model’s bounds. These results do not establish a passing full regression.</p>
+    </section>
+
+    <section class="section" id="sources" aria-labelledby="sources-title">
+      <div class="section-heading"><span class="section-no">06</span><h2 id="sources-title">Source map</h2></div>
+      <p class="muted">Links are pinned to the examined commits. Local links open the downloaded files relative to this report.</p>
+      <div class="grid">
+        <article class="card"><h3>ATS / C++</h3><ul class="sources">
+          <li><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoSIM_ATS_interface.cc">EcoSIM_ATS_interface.cc</a><small>PK lifecycle, hourly gate, packing and source publication · <a href="../repos/amanzi/src/physics/ats/src/pks/ecosim/EcoSIM_ATS_interface.cc">local file</a></small></li>
+          <li><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/ecosim/EcoEngine.cc">EcoEngine.cc</a><small>Exchange-container checks and calls through the interface function table · <a href="../repos/amanzi/src/physics/ats/src/pks/ecosim/EcoEngine.cc">local file</a></small></li>
+          <li><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/pks/mpc/weak_mpc.cc">weak_mpc.cc</a><small>Sequential child-PK advancement · <a href="../repos/amanzi/src/physics/ats/src/pks/mpc/weak_mpc.cc">local file</a></small></li>
+          <li><a href="https://github.com/amanzi/ats/blob/07f491d691e4cbcc97a080614017e70f21a26c4e/src/executables/coordinator.cc">coordinator.cc</a><small>Top-level PK lifecycle and timestep acceptance · <a href="../repos/amanzi/src/physics/ats/src/executables/coordinator.cc">local file</a></small></li>
+        </ul></article>
+        <article class="card"><h3>EcoSIM / Fortran</h3><ul class="sources">
+          <li><a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ecosim_wrappers.F90">ecosim_wrappers.F90</a><small>C bindings and setup/advance sequences · <a href="../repos/ecosim/f90src/ATSUtils/ecosim_wrappers.F90">local file</a></small></li>
+          <li><a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSCPLMod.F90">ATSCPLMod.F90</a><small>Data mapping and the coupled driver entry point · <a href="../repos/ecosim/f90src/ATSUtils/ATSCPLMod.F90">local file</a></small></li>
+          <li><a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSEcoSIMAdvanceMod.F90">ATSEcoSIMAdvanceMod.F90</a><small>Surface physics, snow, plant calls and feedback calculation · <a href="../repos/ecosim/f90src/ATSUtils/ATSEcoSIMAdvanceMod.F90">local file</a></small></li>
+          <li><a href="https://github.com/EcoSIM-model/EcoSIM/blob/fe3afa72e260dc002ceb9751638b7bc0840f9e46/f90src/ATSUtils/ATSStateRegistryMod.F90">ATSStateRegistryMod.F90</a><small>Carried-state schema, packing and restoration · <a href="../repos/ecosim/f90src/ATSUtils/ATSStateRegistryMod.F90">local file</a></small></li>
+        </ul></article>
+      </div>
+      <p class="small muted" style="margin-top:20px">Coupler-order evidence: <a href="https://github.com/amanzi/ats-regression-tests/blob/7bd1fcd26705c40cdd68fee1df28f106ac44a7a8/13_ecosim/ecosim_freeze_thaw.xml#L141">freeze–thaw input at regression-fixture commit <code>7bd1fcd2</code></a>.</p>
+    </section>
+  </main>
+  <footer class="wrap">ATS–EcoSIM knowledge · Source-based findings for the pinned revisions above · Standalone HTML; no external assets or scripts required.</footer>
+</body>
+</html>
