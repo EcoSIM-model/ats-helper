@@ -262,7 +262,258 @@ dependency or compiler adjustments. Consult the checked-out
 [`INSTALL_ATS.md`](https://github.com/amanzi/amanzi/blob/master/INSTALL_ATS.md)
 and build logs when diagnosing failures.
 
+## Semi-implicit EcoSIM surface heat exchange
+
+ATS–EcoSIM uses separate temperature-linearized heat sources for the two
+receiving balances in shared-layer mode:
+
+```text
+q_layer0(T0) = q0_reference + K0 * (T0 - T0_reference)
+q_ground(Tsoil) = qg_reference + Kg * (Tsoil - Tsoil_reference)
+```
+
+References and slopes are frozen during each ATS solve and refreshed together
+after EcoSIM advances. The native radiation and sensible-heat derivatives are
+used for the corresponding exposed surface. Snow, evaporation and water/latent
+responses remain lagged; this is not their full Jacobian.
+
+The surface energy PK automatically uses `surface-ecosim_source_linearized` when
+its source is `surface-ecosim_source`. Its analytic evaluator derivative enters
+the preconditioner as well as the temperature-dependent residual. Custom source
+sums should use `surface-ecosim_source_linearized` as their EcoSIM dependency.
+The raw source remains available under its original key. Other ATS applications do not publish this source replacement
+and retain their existing behavior.
+
+To select the former explicit exchange, set this in the EcoSIM PK:
+
+```xml
+<Parameter name="semi-implicit surface heat exchange" type="bool" value="false"/>
+```
+
+Additional checkpointed fields (with the default source key) are:
+
+- `surface-ecosim_source_dtemperature`: radiation+sensible slope [MW m⁻² K⁻¹].
+- `surface-ecosim_source_temperature_ref`: paired surface temperature [K].
+- `surface-ecosim_source_applied`: source actually used on the last accepted ATS
+  step [MW m⁻²]; the raw EcoSIM source may already describe the next step.
+- `surface-ecosim_source_correction_energy`: cumulative accepted atmospheric
+  heat correction relative to the raw source [MJ m⁻²]. Only accepted steps add
+  to this ledger; the linearization changes no snow/litter inventory or water
+  transfer.
+- `surface-ecosim_source_last_advance_time`: the EcoSIM refresh clock [s], kept
+  with the references across restarts.
+
+No custom checkpoint rejection guard is added. ATS still requires the new
+fields when reading a restart, so checkpoints made before this change need
+migration or a fresh run. Rebuild both ATS and EcoSIM because the C/Fortran
+feedback layout has changed; their existing container-size check detects a
+mismatched installation.
+
+For the one-column freeze–thaw fixture, run the checkpoint energy/linearization
+checks inside Docker with:
+
+```bash
+python3 /ats-helper/tests/validate_ats_ecosim_heat.py /path/to/run --end-days 200
+```
+
+
+## Shared EcoSIM pond/litter layer zero
+
+The EcoSIM PK now enables `shared surface layer` by default. ATS supplies the
+combined surface temperature, liquid-water volume, physical ice volume, mobile
+pond depth, and gauge pressure to EcoSIM's native layer 0. Snow liquid water
+remains in EcoSIM's separate snow stores.
+
+ATS owns the water and energy balances of both the surface pool and soil.
+EcoSIM's layer 0 is an ATS-prescribed boundary used to derive fluxes: its water,
+ice and temperature are installed before weather/canopy preparation and surface
+exchange. Native layer-zero infiltration, phase change, temperature integration,
+and litter–soil exchange (including under snow) are bypassed in shared mode.
+Temporary donor budgets only limit flux availability. The four `litter_*` mirror
+fields are diagnostic outputs and are neither checkpointed as independent stores
+nor restored as EcoSIM-owned carry state. Snow retains its own native state;
+retired snow transfers water and sensible/fusion energy to the ATS surface pool.
+
+The C/Fortran interface exports separate, already area-weighted net sources:
+
+| ATS field | Receiver | Units after transfer |
+| --- | --- | --- |
+| `surface-ecosim_layer0_water_source` | Pond/litter pool | m H₂O s⁻¹ |
+| `surface-ecosim_layer0_energy_source` | Pond/litter pool | MW m⁻² |
+| `surface-ecosim_ground_water_source` | Top soil cell | m H₂O s⁻¹ per column area |
+| `surface-ecosim_ground_energy_source` | Top soil cell | MW m⁻² per column area |
+
+Positive sources enter their receiver. The ground path includes direct bare-soil
+exchange and snow-to-soil transfers over uncovered soil; it excludes native
+layer-zero-to-soil transfers. Its temperature is the actual top ATS soil-cell
+temperature, distinct from the supplied pond/litter temperature.
+
+The existing surface physics keys, `surface-ecosim_water_source` and
+`surface-ecosim_source`, now contain **only layer-zero sources** in shared mode.
+Ground water is converted with column area, cell volume and molar density, then
+added once to the top cell of `subsurface_ecosim_water_source` alongside existing
+root sources. Ground heat enters `subsurface_ecosim_source` [MW m⁻³]; its paired
+slope/reference fields construct `subsurface_ecosim_source_linearized`.
+Shared mode attaches these soil sources even when the input had `source term`
+set to false. Existing user soil sources are retained; a sum already containing
+EcoSIM receives only the missing correction, without duplicating the raw source.
+The existing surface source configuration remains in use for the surface PKs.
+
+ATS computes infiltration/advection and conduction between the two pools as
+internal, equal-and-opposite exchanges. Pond/litter coverage weights the hydraulic
+and thermal interface paths once. At zero coverage, the dry algebraic surface
+trace closes to the soil state without an additional conserved surface store.
+EcoSIM's native depression-storage formula initializes pond coverage; its
+hydrological roughness differs from aerodynamic roughness.
+
+`surface-ecosim_total_water_source` and `surface-ecosim_total_energy_source` are
+component-sum diagnostics, not additional applied sources. In the C ABI,
+`surface_*` aliases `layer0_*` in shared mode, so the heat flux, slope and reference
+remain paired with the same receiver. Legacy mode retains its original source
+semantics.
+
+The surface storage evaluators add native litter retention and dry litter heat
+capacity to the existing mobile pond storage. In symbols, for surface area A:
+
+```text
+Ntotal = Npond + A * Nretained(p)
+Etotal = Epond + A * [Nretained(p) * (f*ul + (1-f)*ui) + Cdry*(T - 273.15)]
+```
+
+Here `f` is ATS's unfrozen fraction and `ul`, `ui` use the input's phase-energy
+models. Retention inverts EcoSIM's existing two-branch litter water-potential
+curve. Its analytic pressure derivative and the temperature/phase derivatives
+enter the ATS solve. The native organic-carbon stock determines dry heat
+capacity. EcoSIM also exports an effective litter/pond thermal resistance,
+which ATS applies to the surface-to-soil conduction path. Material and thermal
+resistance are frozen during each ATS solve and refreshed after EcoSIM advances.
+The surface mobility boundary Jacobian now includes its freezing response.
+
+The current coupled initialization still has **no litter stock**: this change
+does not invent litter mass or activate litter biogeochemistry. With no litter,
+retention and dry heat capacity vanish and the shared pool reduces to ATS
+ponding. The material interface prepares storage for a future initialized litter
+stock. Dynamic litter mass/energy changes, optional surface EWC predictors, and
+a complete atmospheric-flux Jacobian need separate integration and validation.
+Use the standard pressure/temperature solve for this implementation.
+
+The new fields are `surface-ecosim_layer0_material` (14 native material
+parameters) and `surface-ecosim_layer0_thermal_resistance` [m² K MW⁻¹]. Rebuild
+both libraries together because the C/Fortran environment/configuration ABI
+changed. Start from a fresh checkpoint series; old checkpoints lack these fields.
+To use the previous independent layer-zero behavior, set the EcoSIM PK's
+`shared surface layer` parameter to `false`.
+
+Validation in the Ubuntu 24.04 Docker build:
+
+- The one-day bare-soil case passes separate water/energy budget and source-mapping
+  checks. Layer-zero heat is zero when that pool is absent.
+- A two-hour partial frozen-pond case (300-second steps) passes with both source
+  paths active and separate temperature references differing by up to 5.5 K.
+- A ten-second liquid-pond case (one-second steps, diagnostic nonlinear/linear
+  tolerances tightened to 1e-10) passes both pool budgets, with references
+  differing by over 5 K. Production regression tolerances were unchanged.
+- Existing user sources and user sums already containing EcoSIM pass the same
+  budget checks, verifying that references are not double counted.
+- Native snow/litter conservation checks, native retention/derivative checks,
+  and existing ATS `freeze_thaw_surface`, `freeze_thaw_subsurface`, `surface_water`
+  gold regressions pass without modifying gold data.
+- Five short manufactured storage checks pass: four use 60-second steps and the
+  occupied liquid-pond/litter check uses one second. Modified checkpoints discard
+  the baseline predictor history. These verify storage, not litter biogeochemistry.
+- Longer-step robustness remains unresolved: the manufactured liquid pond with
+  retained litter water fails when drained over a single 60-second step. The
+  original 200-day hourly case also remains nonconvergent. Consult the exported
+  split-flux validation report for the final failing cycle; neither failure is
+  represented as a passing regression.
+
+The new split-flux validator checks each receiving balance, direct-to-soil source
+mapping, paired temperature feedback, finite fields and absence of independently
+checkpointed layer-zero mirrors:
+
+```bash
+python3 /ats-helper/tests/validate_ats_ecosim_split_fluxes.py /path/to/run --end-days 1
+```
+
+Run the focused checks inside Docker (use matching build/install paths):
+
+```bash
+python3 /ats-helper/tests/validate_layer0_material.py \
+  /ats-build/install/ecosim-435ab2b0443e/lib/libATSUtils_mods.so
+python3 /ats-helper/tests/run_ats_ecosim_layer0_storage.py \
+  /path/to/one-day-run /path/to/scratch \
+  --library /ats-build/install/ecosim-435ab2b0443e/lib/libATSUtils_mods.so \
+  --ats /ats-build/install/amanzi/bin/ats
+```
+
+The baseline one-day run must save checkpoints 0 and 12 and its XML as
+`input.xml`, with the fixture data available through `data`.
+
 ## License
 
 ATS helper is licensed under the [BSD 3-Clause License](LICENSE).
 Downloaded Amanzi, ATS, EcoSIM, and other dependencies retain their own licenses.
+
+
+## Adaptive pond–soil exchange timestep control
+
+The shared EcoSIM layer-zero coupling now enables a numerical timestep indicator
+in the permafrost MPC. It retains separate pond/litter and top-soil energy and water
+stores and their physical flux laws. It adds no experimental hydraulic resistance.
+
+The control activates when pond depth exceeds 0.01 mm, the top-soil/pond apparent
+heat-capacity ratio is at least 10, and the reference-step exchange number exceeds
+4. It estimates `tau = Cpond*Csoil / (G*(Cpond+Csoil))`, using the smaller of the
+pond's apparent and sensible capacities to protect against a nonlinear trial
+leaving the latent-heat interval. Retained litter water and dry litter heat
+capacity are included. `G` is the covered conductive interface conductance,
+including the existing native layer-zero thermal resistance. The cap is rounded
+down to a dyadic subdivision of the reference timestep, and MPI ranks take a
+common minimum. These are configurable numerical thresholds, not a physical
+infiltration cap or a proof of unconditional solver convergence.
+
+Merge these settings into the existing input, keeping the other entries:
+
+```xml
+<ParameterList name="cycle driver">
+  <ParameterList name="timestep manager">
+    <Parameter name="prescribed timesteps are maximum" type="bool" value="true" />
+  </ParameterList>
+</ParameterList>
+<ParameterList name="PKs">
+  <ParameterList name="permafrost surface and subsurface">
+    <ParameterList name="pond soil exchange timestep control">
+      <Parameter name="enabled" type="bool" value="true" />
+      <Parameter name="maximum exchange number" type="double" value="4.0" />
+      <Parameter name="minimum heat capacity contrast" type="double" value="10.0" />
+      <Parameter name="minimum ponded depth [m]" type="double" value="0.00001" />
+      <Parameter name="reference timestep [s]" type="double" value="3600.0" />
+    </ParameterList>
+  </ParameterList>
+</ParameterList>
+```
+
+Use your input's actual permafrost PK name. The control defaults on only when that
+MPC uses EcoSIM's shared layer-zero storage; other applications retain their prior
+behavior unless explicitly enabled. Set `enabled=false` to disable the indicator.
+For diagnostics, set `verbose object / verbosity level=high` on that MPC.
+
+A prescribed schedule remains strict by default. The explicit maximum-schedule
+option above allows subdivisions and failed-step retries while preserving the
+original cumulative time boundaries, including after restart. Its schedule origin
+is zero seconds unless `prescribed timesteps start time [s]` specifies another
+origin. An exact fixed-hour regression cannot also take adaptive substeps; its
+input must opt into maximum-schedule mode. Ordinary adaptive runs need no
+prescribed schedule.
+
+The adaptive configuration completes the 200-day case from its original initial
+condition with unchanged nonlinear and linear tolerances. The original strict
+hourly control still reproduces the failure. See the
+[implementation, experiments, and conservation checks](ats-ecosim-knowledge/pond-soil-coupling.html#indicator-implementation).
+
+Focused tests in the configured Docker build:
+
+```bash
+ctest --test-dir /ats-build/build/amanzi \
+  -R '^(utils_time_step_manager|pond_soil_exchange_control)$' --output-on-failure
+```
