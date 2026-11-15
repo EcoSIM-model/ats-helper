@@ -1,11 +1,12 @@
 # Sourced by the Ubuntu container's login shell, and again after installation.
-export ATS_BASE=/ats-build
-export AMANZI_SRC_DIR=/ats-helper/repos/amanzi
-export ATS_SRC_DIR="$AMANZI_SRC_DIR/src/physics/ats"
-export AMANZI_BUILD_DIR="$ATS_BASE/build/amanzi"
-export AMANZI_TPLS_BUILD_DIR="$ATS_BASE/build/tpls"
-export AMANZI_DIR="$ATS_BASE/install/amanzi"
-export AMANZI_TPLS_DIR="$ATS_BASE/install/tpls"
+export ATS_BASE=${ATS_BASE:-/ats-build}
+export AMANZI_SRC_DIR=${AMANZI_SRC_DIR:-/ats-helper/repos/amanzi}
+export ATS_SRC_DIR=${ATS_SRC_DIR:-"$AMANZI_SRC_DIR/src/physics/ats"}
+export ECOSIM_SRC_DIR=${ECOSIM_SRC_DIR:-/ats-helper/repos/ecosim}
+export AMANZI_BUILD_DIR=${AMANZI_BUILD_DIR:-"$ATS_BASE/build/amanzi"}
+export AMANZI_TPLS_BUILD_DIR=${AMANZI_TPLS_BUILD_DIR:-"$ATS_BASE/build/tpls"}
+export AMANZI_DIR=${AMANZI_DIR:-"$ATS_BASE/install/amanzi"}
+export AMANZI_TPLS_DIR=${AMANZI_TPLS_DIR:-"$ATS_BASE/install/tpls"}
 export ATS_DIR="$AMANZI_DIR"
 export OPENMPI_DIR=/usr
 export PATH="$AMANZI_DIR/bin:$AMANZI_TPLS_DIR/bin:$PATH"

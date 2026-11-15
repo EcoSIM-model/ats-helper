@@ -24,7 +24,7 @@ def save(data):
 if args[0] == 'build':
     sys.exit(int(os.environ.get('MOCK_BUILD_EXIT', '0')))
 if args[:2] == ['image', 'inspect']:
-    print('arm64'); sys.exit(0)
+    print('sha256:' + 'a' * 64 if args[args.index('--format') + 1] == '{{.Id}}' else 'arm64'); sys.exit(0)
 if args[:2] == ['context', 'show']:
     print('desktop-linux'); sys.exit(0)
 if args[0] == 'create':
@@ -87,6 +87,9 @@ class LauncherTests(unittest.TestCase):
         self.bin_dir.mkdir()
         source = Path(__file__).resolve().parents[1] / 'run_docker.sh'
         shutil.copy2(source, self.project / 'run_docker.sh')
+        fixture = self.project / 'cases/example-case'
+        fixture.mkdir(parents=True)
+        (fixture / 'case.json').write_text('{"name": "example-case"}\n')
         docker = self.bin_dir / 'docker'
         docker.write_text(MOCK_DOCKER)
         docker.chmod(0o755)
@@ -135,6 +138,25 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 13)
         self.assertFalse(any(call[0] == 'create' for call in self.calls()))
         self.assertFalse((self.project / '.docker/container.json').exists())
+
+    def test_reproduction_uses_its_own_volume_and_forwards_prepare_mode(self):
+        result = self.launch('--reproduce', 'example-case', '--prepare-only')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record()['mode'], 'reproduce')
+        create = next(call for call in self.calls() if call[0] == 'create')
+        mount = next(arg for arg in create if arg.startswith('type=volume,'))
+        self.assertRegex(mount, r'source=ats-helper-reproduce-example-case-[0-9a-f]{12}-arm64-a{12},')
+        self.assertEqual(create[-2:], ['example-case', '--prepare-only'])
+        self.assertIn('/ats-helper/docker/reproduce-case.sh', create)
+        self.assertTrue(any(arg.startswith('ATS_REPRODUCE_IMAGE_ID=') for arg in create))
+
+    def test_unknown_or_conflicting_case_fails_before_docker(self):
+        for args in (('--reproduce', '../elsewhere'), ('--reproduce', 'unknown'),
+                     ('--prepare-only',), ('--reproduce', 'example-case', '--build-ats-ecosim')):
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.docker_state / 'calls.jsonl').exists())
 
     def test_older_session_finishing_preserves_newer_record(self):
         older = subprocess.Popen(['bash', str(self.project / 'run_docker.sh'), '--build-ats-ecosim'],

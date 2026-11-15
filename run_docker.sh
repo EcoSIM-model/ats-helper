@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./run_docker.sh [--ubuntu] [--fresh] [--platform linux/amd64|linux/arm64] [--build-ats-ecosim]
+Usage: ./run_docker.sh [--ubuntu] [--fresh] [--platform linux/amd64|linux/arm64] [--build-ats-ecosim | --reproduce CASE]
 
 Build an Ubuntu 24.04 ATS compiler image and open a container shell.
 The latest container record is saved to .docker/container.json.
@@ -14,6 +14,9 @@ The latest container record is saved to .docker/container.json.
   --build-ats-ecosim
                  Build the selected ATS–EcoSIM sources instead of opening a shell.
                  Set JOBS to control parallel compilation (default 2).
+  --reproduce CASE
+                 Fetch, build, run, and verify a bundled case in its own volume.
+  --prepare-only Only fetch/verify sources and inputs for --reproduce.
   -h, --help     Show this message.
 EOF
 }
@@ -21,11 +24,17 @@ EOF
 build_options=()
 platform_options=()
 build_ats_ecosim=false
+reproduce_case=
+prepare_only=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --ubuntu) shift ;;
         --fresh) build_options+=(--no-cache); shift ;;
         --build-ats-ecosim) build_ats_ecosim=true; shift ;;
+        --reproduce)
+            [[ $# -ge 2 ]] || { echo '--reproduce requires a case name.' >&2; exit 2; }
+            reproduce_case=$2; shift 2 ;;
+        --prepare-only) prepare_only=true; shift ;;
         --platform)
             if [[ $# -lt 2 ]]; then
                 echo 'Error: --platform requires linux/amd64 or linux/arm64.' >&2
@@ -43,6 +52,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ -n "$reproduce_case" ]]; then
+    if [[ "$build_ats_ecosim" == true || ! "$reproduce_case" =~ ^[a-z0-9][a-z0-9-]*$ ||
+          ! -f "$project_dir/cases/$reproduce_case/case.json" ]]; then
+        echo 'Select one valid reproduction case, without --build-ats-ecosim.' >&2; exit 2
+    fi
+elif [[ "$prepare_only" == true ]]; then
+    echo '--prepare-only requires --reproduce CASE.' >&2; exit 2
+fi
 image_name=ats-helper-ubuntu:24.04
 # --mount uses CSV syntax as well as shell argument parsing.
 mount_source=${project_dir//\"/\"\"}
@@ -54,12 +71,23 @@ docker build ${build_options[@]+"${build_options[@]}"} \
     -t "$image_name" "$project_dir"
 
 image_arch=$(docker image inspect --format '{{.Architecture}}' "$image_name")
+image_id=$(docker image inspect --format '{{.Id}}' "$image_name")
+build_volume="ats-helper-build-$image_arch"
 
 docker_context=$(docker context show)
 session_mode=shell
 create_options=()
 container_command=()
-if [[ "$build_ats_ecosim" == true ]]; then
+if [[ -n "$reproduce_case" ]]; then
+    session_mode=reproduce
+    # git hash-object works on the host without fetching any model source.
+    case_hash=$(git hash-object "$project_dir/cases/$reproduce_case/case.json")
+    compiler_hash=${image_id#sha256:}
+    build_volume="ats-helper-reproduce-$reproduce_case-${case_hash:0:12}-$image_arch-${compiler_hash:0:12}"
+    create_options+=(-e "JOBS=${JOBS:-2}" -e "ATS_REPRODUCE_IMAGE_ID=$image_id")
+    container_command=(bash --login /ats-helper/docker/reproduce-case.sh "$reproduce_case")
+    if [[ "$prepare_only" == true ]]; then container_command+=(--prepare-only); fi
+elif [[ "$build_ats_ecosim" == true ]]; then
     session_mode=build
     create_options+=(-e "JOBS=${JOBS:-2}")
     container_command=(bash --login /ats-helper/docker/build-ats-ecosim.sh)
@@ -129,7 +157,7 @@ container_id=$(docker create "${create_options[@]}" ${platform_options[@]+"${pla
     --label "ats-helper.architecture=$image_arch" \
     --label "ats-helper.mode=$session_mode" \
     --mount "$workspace_mount" \
-    --mount "type=volume,source=ats-helper-build-$image_arch,target=/ats-build" \
+    --mount "type=volume,source=$build_volume,target=/ats-build" \
     -w /ats-helper \
     "$image_name" ${container_command[@]+"${container_command[@]}"})
 if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then

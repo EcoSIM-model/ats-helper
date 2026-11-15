@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source /etc/profile.d/ats.sh
-ECOSIM_SRC_DIR=/ats-helper/repos/ecosim
+source /ats-helper/docker/ats-env.sh
 build_jobs=${JOBS:-2}
 if [[ ! "$build_jobs" =~ ^[1-9][0-9]*$ ]]; then
     echo 'JOBS must be a positive integer.' >&2
@@ -48,12 +47,23 @@ fi
 ecosim_url=${ecosim_config[0]}
 ecosim_ref=${ecosim_config[1]}
 ecosim_commit=$(git -C "$ECOSIM_SRC_DIR" rev-parse HEAD)
+if [[ "$ecosim_ref" =~ ^[0-9a-fA-F]{40}$ && "$ecosim_ref" != "$ecosim_commit" ]]; then
+    echo "Amanzi pins EcoSIM $ecosim_ref but the selected checkout is $ecosim_commit." >&2
+    exit 2
+fi
+echo "EcoSIM override: Amanzi ref $ecosim_ref resolves to selected committed HEAD $ecosim_commit via the local mirror."
 shopt -s nullglob
 for tpl_source in "$AMANZI_TPLS_BUILD_DIR"/ecosim/ecosim-*-source; do
     if [[ -d "$tpl_source/.git" ]] && \
        [[ "$(git -C "$tpl_source" rev-parse HEAD)" != "$ecosim_commit" ]]; then
         echo "The cached EcoSIM source differs from $ecosim_commit: $tpl_source" >&2
         echo 'Use a separate build volume for a different EcoSIM commit.' >&2
+        exit 2
+    fi
+    if [[ -d "$tpl_source/.git" ]] && \
+       [[ -n "$(git -C "$tpl_source" status --porcelain --untracked-files=no)" ]]; then
+        echo "The cached EcoSIM source has tracked changes: $tpl_source" >&2
+        echo 'Preserve those changes and use a separate build volume.' >&2
         exit 2
     fi
 done
@@ -68,11 +78,13 @@ if [[ ! "$ecosim_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
     git check-ref-format "refs/heads/$ecosim_ref"
     git --git-dir="$mirror" update-ref "refs/heads/$ecosim_ref" "$ecosim_commit"
 fi
-export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_COUNT=3
 export GIT_CONFIG_KEY_0="url.file://$mirror.insteadOf"
 export GIT_CONFIG_VALUE_0="$ecosim_url"
 export GIT_CONFIG_KEY_1=protocol.file.allow
 export GIT_CONFIG_VALUE_1=always
+export GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf
+export GIT_CONFIG_VALUE_2=git@github.com:
 
 {
     for repo in "$AMANZI_SRC_DIR" "$ATS_SRC_DIR" "$ECOSIM_SRC_DIR"; do
@@ -109,7 +121,7 @@ bash "$AMANZI_SRC_DIR/bootstrap.sh" \
     --tools-build-dir="$ATS_BASE/build/tools" \
     --tools-install-prefix="$ATS_BASE/install/tools"
 
-source /etc/profile.d/ats.sh
+source /ats-helper/docker/ats-env.sh
 test -x "$AMANZI_DIR/bin/ats"
 ldd "$AMANZI_DIR/bin/ats" | tee "$ATS_BASE/logs/ats-libraries.txt"
 if grep -q 'not found' "$ATS_BASE/logs/ats-libraries.txt"; then

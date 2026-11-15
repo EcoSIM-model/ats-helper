@@ -3,6 +3,58 @@
 Download and build ATS in Ubuntu 24.04 using a compiler-container workflow,
 adapted from [EcoSIM's Docker launcher](https://github.com/EcoSIM-model/EcoSIM/blob/main/run_docker.sh).
 
+## Reproduce the pond–soil coupling case
+
+With Git and Docker installed and Docker running, clone the branch containing
+this case (or check out this helper commit after cloning), then run:
+
+```bash
+git clone --branch docker-container-session-reuse https://github.com/EcoSIM-model/ats-helper.git
+cd ats-helper
+./reproduce.sh 200day-adaptive
+```
+
+Or ask the agent: **“reproduce 200day-adaptive”**. The
+[reproduce-case skill](.agents/skills/reproduce-case/SKILL.md) uses the same command.
+It downloads the exact Amanzi, ATS, and EcoSIM commits with recursive submodules,
+builds in Ubuntu 24.04, runs the single-rank 200-day case, compares the final
+checkpoint, and writes an HTML report with PNG/PDF plots under
+`build-logs/reproduce/200day-adaptive/<run>/`. A nonzero exit means preparation,
+build, simulation, or comparison failed; consult the report and logs.
+
+The first dependency build can take hours and needs network access and ample
+Docker storage. Later runs reuse a dedicated case volume for the same manifest,
+architecture, and compiler image, separate from your development checkouts and
+build. Use `JOBS=4 ./reproduce.sh 200day-adaptive` to change compilation
+concurrency when memory permits. `--prepare-only` verifies
+inputs and recursively downloads sources without building or running;
+`--platform linux/arm64` or `--platform linux/amd64` selects the target explicitly.
+
+The self-contained [case definition](cases/200day-adaptive/case.json) pins all
+three model commits and checksums for the input, forcing, timestep data, and
+reference checkpoint. It preserves the historical EcoSIM clock issue documented
+in that file. The baseline was produced on Ubuntu ARM64 with one MPI rank;
+another architecture or toolchain may fail its strict numerical comparison.
+Ubuntu packages and transitive dependency downloads are not fully locked; the
+report records the actual image ID and installed package versions. The plots
+show logged timesteps and final soil profiles, rather than a full time series
+of every model field.
+
+This case selects Amanzi `f96df4bc`, ATS `aabc2fcb`, and EcoSIM `d23a54bf`.
+The full hashes are in the case definition. These commits include the separate
+pond/soil fluxes, shared layer-zero state, adaptive thermal timestep control, and
+the standalone EcoSIM module-include fix. The saved reference predates only that
+build configuration fix. The input replay matched all 168 reference datasets with the
+existing coupled executable; the complete coupled build from an empty dependency
+cache has not yet been validated for this packaged command.
+
+To publish another case, add `cases/<name>/case.json`, its input/data and reference
+checkpoint using the same schema, with full commit hashes and SHA-256 checksums.
+Push the model commits first, then commit and push the helper's scripts, skill,
+and entire case folder. Readers need the helper revision containing that case;
+the case's model pins do not follow later branch updates. Use a new case name
+when changing the scientific baseline.
+
 ## Start the Ubuntu environment
 
 Install and start Docker Desktop (macOS) or Docker Engine (Linux), then run on
