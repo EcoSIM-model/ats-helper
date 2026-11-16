@@ -40,6 +40,11 @@ report records the actual image ID and installed package versions. The plots
 show logged timesteps and final soil profiles, rather than a full time series
 of every model field.
 
+To use your own build, analysis, or plotting scripts, follow the
+[independent reproduction and validation specification](cases/200day-adaptive/REPRODUCE.md).
+It defines source selection, build options, expected output, units, flux signs,
+balance equations, and tolerances without requiring the exploratory scripts.
+
 This case selects Amanzi `f96df4bc`, ATS `aabc2fcb`, and EcoSIM `d23a54bf`.
 The full hashes are in the case definition. These commits include the separate
 pond/soil fluxes, shared layer-zero state, adaptive thermal timestep control, and
@@ -309,12 +314,10 @@ migration or a fresh run. Rebuild both ATS and EcoSIM because the C/Fortran
 feedback layout has changed; their existing container-size check detects a
 mismatched installation.
 
-For the one-column freeze–thaw fixture, run the checkpoint energy/linearization
-checks inside Docker with:
-
-```bash
-python3 /ats-helper/tests/validate_ats_ecosim_heat.py /path/to/run --end-days 200
-```
+For the one-column freeze–thaw fixture, implement the checkpoint energy and
+linearization checks from the
+[heat and water balance specification](cases/200day-adaptive/REPRODUCE.md#independent-heat-and-water-balance-checks)
+using your preferred HDF5 tools.
 
 
 ## Shared EcoSIM pond/litter layer zero
@@ -427,27 +430,12 @@ Validation in the Ubuntu 24.04 Docker build:
   split-flux validation report for the final failing cycle; neither failure is
   represented as a passing regression.
 
-The new split-flux validator checks each receiving balance, direct-to-soil source
-mapping, paired temperature feedback, finite fields and absence of independently
-checkpointed layer-zero mirrors:
-
-```bash
-python3 /ats-helper/tests/validate_ats_ecosim_split_fluxes.py /path/to/run --end-days 1
-```
-
-Run the focused checks inside Docker (use matching build/install paths):
-
-```bash
-python3 /ats-helper/tests/validate_layer0_material.py \
-  /ats-build/install/ecosim-435ab2b0443e/lib/libATSUtils_mods.so
-python3 /ats-helper/tests/run_ats_ecosim_layer0_storage.py \
-  /path/to/one-day-run /path/to/scratch \
-  --library /ats-build/install/ecosim-435ab2b0443e/lib/libATSUtils_mods.so \
-  --ats /ats-build/install/amanzi/bin/ats
-```
-
-The baseline one-day run must save checkpoints 0 and 12 and its XML as
-`input.xml`, with the fixture data available through `data`.
+The [field and source-routing specification](cases/200day-adaptive/REPRODUCE.md#checkpoint-fields-geometry-and-units)
+and [balance checks](cases/200day-adaptive/REPRODUCE.md#independent-heat-and-water-balance-checks)
+define independent checks of each receiver, its temperature feedback, and finite
+output. The [optional litter retention and storage procedures](cases/200day-adaptive/REPRODUCE.md#optional-litter-retention-and-storage-checks)
+describe the native API, synthetic material, checkpoint preparation, and acceptance
+tolerances. Run these diagnostics on copies, keeping the baseline case unchanged.
 
 ## License
 
@@ -509,7 +497,7 @@ prescribed schedule.
 The adaptive configuration completes the 200-day case from its original initial
 condition with unchanged nonlinear and linear tolerances. The original strict
 hourly control still reproduces the failure. See the
-[implementation, experiments, and conservation checks](ats-ecosim-knowledge/pond-soil-coupling.html#indicator-implementation).
+[independent reproduction and conservation checks](cases/200day-adaptive/REPRODUCE.md).
 
 Focused tests in the configured Docker build:
 
