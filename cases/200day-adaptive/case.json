@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "200day-adaptive",
+  "description": "Historical 200-day freeze-thaw column with shared pond/soil exchange and adaptive thermal timesteps.",
+  "sources": {
+    "amanzi": {
+      "url": "https://github.com/jinyun1tang/amanzi.git",
+      "commit": "f96df4bce4b61e1232f5fd4bbbb455cbd4cf5ce8"
+    },
+    "ats": {
+      "url": "https://github.com/jinyun1tang/ats.git",
+      "commit": "aabc2fcba0949b6c9cc98195ae62e5561001f156"
+    },
+    "ecosim": {
+      "url": "https://github.com/EcoSIM-model/EcoSIM.git",
+      "commit": "d23a54bf1c8bc1fd6a6b89a5f84b9307e6fe2225"
+    }
+  },
+  "files": {
+    "data/daymet_TaylorRiverCO.h5": "6f52aff981b8c72e232a0258dca0f6f8324d9d114c2b229e8a207ab8f2d77379",
+    "data/ecosim_freeze_thaw_dts.h5": "e086323f48b82ba0587e7f732bbc2807eb33d8bb00fe5b9ee7ec9a7360ebce03",
+    "input.xml": "6962f13293a07dd0c4e0725772aaa46461e52da37904af014c9cb4cc5f4e91fd",
+    "reference/checkpoint_final.h5": "69e7f1c3caf816d8affb0d1181f4c80a7b019bb00bdad9e6d526d817d3641a36"
+  },
+  "input": "input.xml",
+  "reference_checkpoint": "reference/checkpoint_final.h5",
+  "runtime": {
+    "mpi_ranks": 1,
+    "end_time_s": 17280000.0,
+    "accepted_steps": 4811,
+    "failed_steps": 0
+  },
+  "comparison": {
+    "rtol": 1e-08,
+    "atol": 1e-10
+  },
+  "reference_environment": {
+    "os": "Ubuntu 24.04",
+    "architecture": "aarch64",
+    "compiler": "GNU C++ / Fortran 13.3",
+    "mpi_ranks": 1
+  },
+  "provenance": {
+    "input": "Derived from the 13_ecosim/ecosim_freeze_thaw fixture in AndrewGraus/ats-regression-tests commit 7bd1fcd26705c40cdd68fee1df28f106ac44a7a8; adapted for shared-layer sources and the adaptive timestep controller. External paths and insignificant trailing whitespace were normalized when bundling this case; parameter values are unchanged.",
+    "forcing_and_timesteps": "Unmodified HDF5 bytes from that fixture; retained near-hour floating point timesteps.",
+    "reference": "Final checkpoint of final-indicator-200day, generated 2026-11-15 with the Amanzi/ATS source content above and EcoSIM fc683204a597fddf9cfd445b1f353953a03b3341. The selected EcoSIM d23a54bf adds only the standalone DebugTools module include fix; model equations and this reference are unchanged. Git version strings predate the source commits. No LD_PRELOAD observer is needed to run the case."
+  },
+  "known_limitations": [
+    "Preserves the historical EcoSIM hourly clock truncation/refresh defect. This baseline is for reproduction, not a corrected clock implementation.",
+    "Pins model sources, their recursive submodules, inputs, and checkpoint. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image identity and installed packages are recorded per run.",
+    "Numerical baseline is single-rank Ubuntu ARM64. Other architectures/toolchains may fail the strict comparison; a completed simulation alone does not count as a reproduced result."
+  ]
+}
