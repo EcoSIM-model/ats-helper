@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATS–EcoSIM | Pond and top-soil coupling strategy</title>
+<style>
+:root{color-scheme:light;--ink:#182c35;--muted:#52646b;--teal:#006c62;--line:#dce2de;--paper:#f5f4ef}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.65 system-ui,sans-serif}main{max-width:1080px;margin:auto;padding:40px 28px 80px}a{color:var(--teal)}h1,h2,h3{line-height:1.2;letter-spacing:-.025em}h1{font-size:clamp(2.2rem,5vw,3.6rem);max-width:900px}h2{margin-top:42px}p{max-width:920px}.muted,small{color:var(--muted)}.eyebrow{color:var(--teal);font-size:.8rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.callout{border-left:4px solid var(--teal);background:#e9f3ef;padding:18px 24px}.warning{background:#fff4df;border-color:#95611d}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:white;border:1px solid var(--line);border-radius:10px;padding:22px}.card h3{margin-top:0}.scroll{overflow-x:auto}table{border-collapse:collapse;background:white;width:100%;font-size:.9rem}th,td{padding:13px 16px;text-align:left;vertical-align:top;border:1px solid var(--line)}th{background:#edf1ec}code,pre,.eq{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{font-size:.85em;overflow-wrap:anywhere}pre,.eq{background:#132a33;color:#edf6f4;padding:20px;overflow:auto;font-size:.86rem;white-space:pre-wrap}.diagram{display:flex;align-items:center;justify-content:center;gap:20px;margin:25px 0}.pool{background:white;border:1px solid var(--line);border-top:4px solid var(--teal);padding:20px;width:40%;text-align:center}.arrow{font-size:1.5rem;color:var(--teal)}li{margin:10px 0}footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);font-size:.8rem}@media(max-width:650px){.grid{grid-template-columns:1fr}main{padding:25px 18px}.diagram{gap:8px}.pool{padding:12px;width:46%}th,td{padding:10px}}@media print{body{background:white}main{max-width:none;padding:0}.card,table{break-inside:avoid}.eq,pre{background:#f2f4f3;color:#182c35}}
+</style>
+</head>
+<body><main>
+<a href="general-coupling-strategy.html">← ATS–EcoSIM knowledge</a>
+<p class="eyebrow">Solution strategy and controlled experiments · November 15, 2026</p>
+<h1>Stabilizing pond and top-soil coupling</h1>
+<p class="muted">Scope: the local ATS–EcoSIM shared layer-0 implementation, with separate pond/litter and soil source terms. Source revisions: ATS <code>07f491d6</code>, EcoSIM <code>435ab2b0</code>, plus the existing uncommitted coupling changes. This report distinguishes measured behavior, experimental modifications, and proposed production work.</p>
+<div class="callout"><strong>Current implementation:</strong> an exchange-timescale indicator reduces timesteps proactively while retaining separate mass and energy stores and the existing physical flux laws. The report includes the new implementation and the earlier hydraulic-resistance experiments.</div>
+
+<section id="indicator-implementation">
+<h2>Implemented: adaptive exchange indicator</h2>
+<p><strong>The production code now includes the indicator approach.</strong> It selects smaller timesteps without adding the experimental hydraulic resistance or merging the two temperatures. The earlier resistance experiments below remain historical mechanism tests.</p>
+<div class="eq">τapparent = [C₀,app / (1 + C₀,app/Cₛ,app)] / G
+C₀,safe = min(C₀,app, C₀,sensible)
+τsafe = [C₀,safe / (1 + C₀,safe/Cₛ,app)] / G
+χreference = Δtreference / τsafe</div>
+<p>The sensible lower envelope is essential here: apparent capacity includes a latent-heat buffer that disappears when a nonlinear trial moves outside the freezing interval. This changes the timestep recommendation, not the heat capacity in the governing equations. Sensible capacity is assembled from the configured liquid/ice internal-energy derivatives and their energy weights, plus native dry litter heat capacity.</p>
+<div class="scroll"><table><thead><tr><th>Activation/control</th><th>Default</th></tr></thead><tbody>
+<tr><td>Present pond/layer-zero depth</td><td>Greater than 1 × 10⁻⁵ m (0.01 mm)</td></tr>
+<tr><td>Top-soil/pond apparent capacity ratio</td><td>At least 10</td></tr>
+<tr><td>Reference-step exchange number</td><td>Greater than 4</td></tr>
+<tr><td>Reference timestep</td><td>3,600 s; cap rounded down to a dyadic subdivision</td></tr>
+<tr><td>Scope</td><td>Defaults enabled for EcoSIM shared layer-zero storage; otherwise opt-in</td></tr>
+</tbody></table></div>
+<p>G uses top-cell thermal conductivity, face area, centroid-to-face distance, native layer-zero thermal resistance, and covered area exactly once. This is a conductive exchange-time estimate, not a complete eigenvalue estimate of the pressure–temperature Jacobian. Advective and phase-dependent flow responses still belong to the nonlinear solve.</p>
+<div class="callout"><strong>At the original failing checkpoint:</strong> capacity contrast ≈ 19.54; τapparent ≈ 101,102 s; τsafe ≈ 263.24 s; χreference ≈ 13.68. The indicator therefore selects a 900-second cap before attempting the step.</div>
+<p>All ranks evaluate their local surface columns and use the MPI-global minimum cap. The controller retains no new carried physical state; restart recomputes the indicator from the accepted fields. Retained water and native dry litter heat capacity participate in the capacity estimate, ready for future litter initialization.</p>
+<h3>Required input for a prescribed schedule</h3>
+<p>Merge the following into existing lists; use the actual permafrost PK name. Unspecified controller thresholds use the defaults above.</p>
+<pre>&lt;ParameterList name="cycle driver"&gt;
+  &lt;ParameterList name="timestep manager"&gt;
+    &lt;Parameter name="prescribed timesteps are maximum" type="bool" value="true" /&gt;
+  &lt;/ParameterList&gt;
+&lt;/ParameterList&gt;
+&lt;ParameterList name="PKs"&gt;
+  &lt;ParameterList name="permafrost surface and subsurface"&gt;
+    &lt;ParameterList name="pond soil exchange timestep control"&gt;
+      &lt;Parameter name="enabled" type="bool" value="true" /&gt;
+    &lt;/ParameterList&gt;
+  &lt;/ParameterList&gt;
+&lt;/ParameterList&gt;</pre>
+<p>Maximum-schedule mode preserves cumulative prescribed boundaries while allowing subdivisions and retries. The origin is zero seconds by default; set <code>prescribed timesteps start time [s]</code> for a different absolute origin. Strict schedules remain strict unless explicitly changed. Ordinary adaptive runs do not require a prescribed schedule.</p>
+<div id="indicator-validation">
+<h3>Final validation</h3>
+<div class="warning callout"><strong>Subsequent accuracy finding:</strong> the completed run has a floating-point clock-boundary defect affecting EcoSIM solar-hour selection and update counts. <a href="thermal-refinement/index.html">See the controlled timing audit and refinement results</a>. The indicator resolves nonlinear convergence; a separate clock correction remains required.</div>
+<p><a href="200day-results/index.html">View the complete 200-day plots, soil profiles, and failure-window close-up →</a></p>
+<div class="scroll"><table><thead><tr><th>Configuration</th><th>Result</th></tr></thead><tbody>
+<tr><td>Original strict hourly schedule, indicator disabled</td><td>Reproduces failure: 101 nonlinear iterations; error 1.44734.</td></tr>
+<tr><td>Adaptive maximum schedule + indicator, original failing-hour restart</td><td>Completes in five accepted substeps: 900, 450, 675, 900, 675 s. No failed nonlinear solves.</td></tr>
+<tr><td>Adaptive maximum schedule + indicator, fresh day-0 start</td><td>Completes 200 days: 4,811 accepted steps, including 18 steps shorter than one hour. No failed nonlinear solves.</td></tr>
+<tr><td>Adaptive maximum schedule without indicator</td><td>Also completes 200 days, with 4,808 accepted steps, but incurs a 101-iteration failure near day 140.67 before retrying at a smaller step.</td></tr>
+</tbody></table></div>
+<p><strong>The indicator's demonstrated benefit is proactive avoidance of that failed solve.</strong> Ordinary adaptive retries also recover the case. These results do not establish the indicator as the only possible solution or validate the thresholds for every site.</p>
+<ul><li>Nonlinear and linear tolerances, forcing, physical source ownership, and hydraulic/thermal flux laws are unchanged. There is no β resistance multiplier in these runs.</li>
+<li>Independent pond and top-soil water/energy budgets pass on 1,438 consecutive accepted-step pairs in the logged day-140.5-to-200 window; available accepted checkpoints match the logged inventories exactly. Additional saved checkpoint pairs, source mapping, and finite-value checks pass.</li>
+<li>The largest individual-pool energy imbalance in the logged window is 1.83 × 10⁻⁴ W m⁻². The largest water imbalance is 8.06 × 10⁻⁷ mol s⁻¹ m⁻² (approximately 0.0000523 mm h⁻¹).</li>
+<li>CTest passes the indicator test and all five timestep-manager cases, including retry, nonuniform schedules, restart, event alignment, roundoff alignment, and unchanged strict behavior. The mathematical test also checks dry/insulated pools, capacity contrast, units, latent-buffer protection, and dry litter capacity.</li>
+<li>A two-rank indicator test confirms the common minimum when only one rank has a limiting pond. Two-rank ATS startup and EcoSIM PK registration pass. The 200-day science run uses one MPI rank.</li>
+<li>Existing <code>freeze_thaw_surface</code>, <code>freeze_thaw_subsurface</code>, and <code>surface_water</code> outputs match their unchanged gold checkpoints.</li></ul>
+<p>The new adaptive configuration resolves this convergence failure through subdivision. A strict fixed-hour schedule deliberately retains its original semantics and still requires an input change to allow adaptation. Gold files have not been changed.</p>
+<p>Artifacts: <a href="../build-logs/pond-soil-indicator-20261115T191830Z/summary.json">structured results</a> · <a href="../build-logs/pond-soil-indicator-20261115T191830Z/final-indicator-200day/input.xml">tested 200-day input</a> · <a href="../build-logs/pond-soil-indicator-20261115T191830Z/final-indicator-200day/accepted-budget-validation.json">accepted-step budgets</a> · <a href="../build-logs/pond-soil-indicator-20261115T191830Z/REPRODUCE.txt">reproduction notes</a>.</p>
+</div>
+<p>Source: <a href="../repos/amanzi/src/physics/ats/src/pks/mpc/pond_soil_exchange_control.hh">indicator calculation</a>, <a href="../repos/amanzi/src/physics/ats/src/pks/mpc/mpc_permafrost.cc">accepted-state integration and MPI cap</a>, <a href="../repos/amanzi/src/utils/TimeStepManager.cc">schedule subdivision</a>. These configurable thresholds are numerical heuristics and do not establish a unique physical resistance or unconditional convergence.</p>
+</section>
+
+<h2>1. Evidence at the failure</h2>
+<p>The hourly step beginning at day <strong>140.6666667</strong> fails to converge. The following values describe the accepted state at its start, not an accepted end state.</p>
+<div class="scroll"><table><thead><tr><th>Quantity, per m²</th><th>Pond/layer 0</th><th>Top soil cell</th></tr></thead><tbody>
+<tr><td>Depth or thickness</td><td>0.616 mm water equivalent</td><td>100 mm</td></tr>
+<tr><td>Temperature</td><td>273.207911 K</td><td>273.032780 K</td></tr>
+<tr><td>Sensible heat capacity</td><td>2.461 kJ K⁻¹</td><td>216.928 kJ K⁻¹</td></tr>
+<tr><td>Local ∂E/∂T at fixed pressure, including phase redistribution</td><td>993.487 kJ K⁻¹</td><td>19,411.052 kJ K⁻¹</td></tr>
+<tr><td>Phase state</td><td>Liquid fraction 0.894649</td><td>Liquid saturation 0.469861; ice saturation 0.530139</td></tr>
+</tbody></table></div>
+<p>The soil has about 88 times the pond's sensible capacity, or 20 times its local tangent capacity at this state. The pond's latent-heat buffer disappears when a trial leaves the freezing interval. Trial pond temperature then jumps between frozen and liquid states, changing mobility and advected heat. One rejected trial produced 528 mm h⁻¹ infiltration and 7,211 W m⁻² advected heat. These are solver guesses, not realized hourly transfers.</p>
+<p>Air is 279.966667 K and snow depth is approximately 0.461 m. The initial soil was 285.15 K with zero ice; the frozen state developed during the simulation. Warm air over previously frozen soil is physically possible. These observations identify a difficult coupled regime; they do not establish one sole cause.</p>
+
+<h2>2. Retain conservative exchange</h2>
+<div class="diagram" role="img" aria-label="Separate pond and soil mass and energy stores connected by one shared water and heat exchange"><div class="pool"><strong>Pond + future litter</strong><br>N₀, E₀, p₀, T₀<br><small>EcoSIM layer-0 external fluxes</small></div><div class="arrow">⇄</div><div class="pool"><strong>Top soil cell</strong><br>Nₛ, Eₛ, pₛ, Tₛ<br><small>EcoSIM soil external fluxes</small></div></div>
+<pre>ΔN₀/Δt = W₀ − J − lateral surface outflow
+ΔNₛ/Δt = Wₛ + J − deeper/lateral soil outflow
+
+ΔE₀/Δt = Q₀ − Qconductive − Qadvective − lateral surface energy outflow
+ΔEₛ/Δt = Qₛ + Qconductive + Qadvective − deeper/lateral soil energy outflow</pre>
+<p>Use exactly the same interface water flux and donor-water enthalpy in both energy equations. Internal exchange must cancel in summed budgets. ATS owns storage and exchange; EcoSIM layer 0 supplies external fluxes from the prescribed ATS state. Future litter adds retention, dry heat capacity, and resistance without adding a competing native water or temperature solve.</p>
+
+<h2>3. Hydraulic resistance before an arbitrary flux cap</h2>
+<p>The failing input sets <code>surface rel perm strategy = clobber</code> and <code>use surface rel perm = true</code>. The boundary uses pond-based mobility while retaining soil intrinsic permeability. This motivates testing whether the frozen top-cell mobility should also enter the interface resistance; it does not prove the existing boundary discretization is incorrect.</p>
+<div class="eq">q = (H₀ − Hₛ) / (Rpond/litter + Rtop-soil)</div>
+<p>Here q is a volumetric flux per total surface area, H is hydraulic head, and hydraulic resistance has units of time. A production formulation must derive each resistance from the actual geometry, intrinsic permeability, viscosity, phase-dependent relative permeability, and covered area. Avoid counting top-cell resistance or pond coverage twice.</p>
+<div class="warning callout"><strong>Do not cap q at conductivity alone.</strong> Conductivity must be multiplied by the hydraulic gradient. <strong>Do not cap infiltration using air-filled pores alone.</strong> This top cell is essentially filled by liquid plus ice, yet throughflow can occur when water leaves the cell simultaneously.</div>
+<p>An admissible water balance must include downstream and lateral outflow, phase-volume changes, compressibility, and available liquid donor water. Enforce positivity through the nonlinear update, active constraints, or a conservative shared flux; independently clipping the two pool equations would break conservation.</p>
+
+<h2>4. Controlled experiment</h2>
+<p>Restart from the same accepted checkpoint <code>checkpoint03376.h5</code>. Keep forcing, source terms, mesh, solver tolerances, separate temperatures, and enthalpy definitions fixed. First reproduce failure with the restart control.</p>
+<ol>
+<li><strong>Hourly baseline:</strong> unchanged pond-based mobility.</li>
+<li><strong>Shorter timestep controls:</strong> subdivide the same physical hour. This tests temporal/nonlinear difficulty without changing the interface law.</li>
+<li><strong>Soil-mobility control:</strong> use the existing interior-pressure boundary option. This deliberately omits the pond-freezing constraint and is a diagnostic, not a recommended production setting.</li>
+<li><strong>Added soil resistance:</strong> retain pond freezing and coverage, and test a smooth additional resistance based on the top-soil relative permeability at the accepted start of each step.</li>
+</ol>
+<pre>r₀ = existing dimensionless pond mobility before the coverage multiplier
+rₛ = top-soil k_relative(Sliquid), frozen during each nonlinear solve
+rtest = r₀ rₛ / (rₛ + β r₀)
+∂rtest/∂r₀ = rₛ² / (rₛ + β r₀)²
+
+β = 0 recovers the baseline; β = 1 adds a full nominal soil resistance.
+The existing coverage multiplier is applied once, after this transformation.</pre>
+<p>This is a mechanism test, not a calibrated geometric resistance law. It adds resistance to the existing boundary representation. The accepted-state soil coefficient is lagged; pond pressure and unfrozen-fraction derivatives are transformed analytically. A successful test would motivate a fully coupled implementation, not validate this approximation for production.</p>
+<div id="experiment-results">
+<h3>Measured results</h3>
+<p><strong>Two fresh-start experiments reached day 200:</strong> the original interface with 900-second timesteps, and the added-resistance prototype with β = 0.1 and the original 3,600-second timesteps. Both retain separate pond and soil temperatures.</p>
+<div class="scroll"><table><thead><tr><th>Same failing-hour restart</th><th>Timestep</th><th>Result</th><th>Nonlinear iterations</th><th>Largest positive trial infiltration</th></tr></thead><tbody>
+<tr><td>Unchanged baseline</td><td>3,600 s</td><td>Fails</td><td>101; error 1.44734</td><td>597.982 mm h⁻¹</td></tr>
+<tr><td>Unchanged baseline</td><td>1,800 s</td><td>Fails on first substep</td><td>101; error 0.336783</td><td>2.357 mm h⁻¹</td></tr>
+<tr><td>Unchanged baseline</td><td>900 s</td><td>Completes the hour</td><td>35, 3, 2, 2</td><td>3.819 mm h⁻¹</td></tr>
+<tr><td>Added resistance, β = 0.001</td><td>3,600 s</td><td>Fails</td><td>101; error 1.46606</td><td>91.652 mm h⁻¹</td></tr>
+<tr><td>Added resistance, β = 0.01</td><td>3,600 s</td><td>Completes the hour</td><td>33</td><td>0.972 mm h⁻¹</td></tr>
+<tr><td>Added resistance, β = 0.1</td><td>3,600 s</td><td>Completes the hour</td><td>15</td><td>0.0417 mm h⁻¹</td></tr>
+<tr><td>Added resistance, β = 1</td><td>3,600 s</td><td>Fails</td><td>101; error 1.69528</td><td>0.00473 mm h⁻¹</td></tr>
+<tr><td>Soil mobility only; pond constraint omitted</td><td>3,600 s</td><td>Fails</td><td>101; error 1.69527</td><td>0.0109 mm h⁻¹</td></tr>
+</tbody></table></div>
+<p><small>Trial maxima include rejected residual evaluations and are not accepted water transfers. Counts are NKA iterations, not residual evaluations. The soil-only test uses the same lagged soil coefficient as the resistance prototype. An initial attempt using the existing interior-pressure XML option stopped during setup because a CompositeVector mesh was unset; it is retained in the logs and is not treated as a convergence result.</small></p>
+<div class="scroll"><table><thead><tr><th>Experiment</th><th>From the original day-0 state</th><th>From the original day-140.6667 checkpoint</th></tr></thead><tbody>
+<tr><td>900 s, original interface</td><td>Completes day 200 (19,200 steps)</td><td>Completes day 200</td></tr>
+<tr><td>3,600 s, β = 0.01</td><td>Fails attempting day 140.625 → 140.6667; error 0.468943</td><td>Completes day 200</td></tr>
+<tr><td>3,600 s, β = 0.1</td><td>Completes day 200 (4,800 steps)</td><td>Completes day 200</td></tr>
+</tbody></table></div>
+<h3>Conservation and reproducibility</h3>
+<ul><li>The instrumented hourly baseline matches all 240 original failing-hour ATS residual evaluations exactly, including temperatures and fluxes. Native hourly scratch arrays differ after restart because they are not checkpoint state; ATS reference sources match.</li>
+<li>The added transformation's analytical derivative passes 48 finite-difference checks; maximum relative error is 2.86 × 10⁻⁶.</li>
+<li>All successful one-hour tests pass the existing separate-pool budget validator. Saved checkpoint pairs in both successful fresh runs pass finite-value, source-mapping, and water/energy budget checks.</li>
+<li>Detailed accepted-step checks cover day 140.5 through day 200: 5,712 consecutive pairs for 900 s and 1,428 pairs for β = 0.1. Logged inventories match the available accepted checkpoints exactly.</li>
+<li>For the fresh β = 0.1 run, the largest individual-pool energy imbalance in that window is 7.31 × 10⁻⁵ W m⁻²; the largest water imbalance is 7.15 × 10⁻⁷ mol s⁻¹ m⁻² (0.0000464 mm h⁻¹). For the fresh 900-second run the corresponding maxima are 2.96 × 10⁻⁴ W m⁻² and 3.29 × 10⁻⁶ mol s⁻¹ m⁻².</li>
+<li>Experiments run in Ubuntu 24.04 ARM64 Docker through isolated LD_PRELOAD libraries. Existing Amanzi, ATS and EcoSIM source diffs/status are unchanged; production executable and regression gold files were not replaced.</li></ul>
+<div class="callout"><strong>Interpretation:</strong> the results support interface mobility as one contributor to the nonlinear difficulty. They also show that small infiltration alone does not guarantee convergence. A single-temperature approximation was not needed for these successful cases, and has not been tested here.</div>
+<p><strong>Practical next step:</strong> use the 900-second case as a completed numerical control. Before promoting the hourly resistance prototype, derive the interface resistance from geometry, include the soil response in the coupled Jacobian/preconditioner, and test timestep and parameter sensitivity. β = 0.1 is an experimental weight, not a recommended material constant.</p>
+<p>The two successful fresh runs differ in final top-soil temperature by 0.214 K and total column soil water by approximately 0.0193 kg m⁻². They also use different timesteps, so this comparison cannot isolate resistance error or establish accuracy.</p>
+<p>Review artifacts: <a href="../build-logs/pond-soil-coupling-20261115T184122Z/summary.json">complete structured results</a> · <a href="../build-logs/pond-soil-coupling-20261115T184122Z/results.csv">results table (CSV)</a> · <a href="../build-logs/pond-soil-coupling-20261115T184122Z/experiment.cc">resistance prototype and observer</a> · <a href="../build-logs/pond-soil-coupling-20261115T184122Z/REPRODUCE.txt">reproduction notes</a>.</p>
+</div>
+
+<h2>5. Production solver strategy</h2>
+<div class="grid"><article class="card"><h3>Keep both temperatures</h3><p>Use a local pressure–temperature block for pond and top soil. Include derivatives of phase-dependent mobility, hydraulic gradient, conductive heat exchange, and donor enthalpy. The current model already couples these processes; this proposal targets the accuracy of its Jacobian/preconditioner and globalization.</p><p>Consider total energy E₀ + Eₛ and a temperature difference as algebraic variables. Summing cancels internal heat exchange. An equivalent change of variables helps only when the solver and preconditioner use that structure.</p></article><article class="card"><h3>Limit trial updates</h3><p>Use line search or a trust region that respects available liquid water and follows the enthalpy–phase relation. Reduce timesteps around pond appearance and freeze–thaw transitions. Evaluate convergence and water/energy residuals together.</p><p>Any smoothing or regularization must be quantified through sensitivity and conservation checks, rather than selected only because it removes one failure.</p></article></div>
+
+<h2>6. Shared-temperature experiment</h2>
+<p>For a sufficiently fast equilibrating thin pond, impose T₀ = Tₛ = T and solve Ecombined(T,p₀,pₛ) = E₀(T,p₀) + Eₛ(T,pₛ). Retain separate water pools and their pressure relations; sum their energy equations and remove the internal exchange term. Include both latent-heat contributions and future dry litter heat capacity.</p>
+<p>This removes one stiff temperature-difference mode, but also removes the physical pond–soil thermal gradient. Judge the approximation using equilibration time τ ≈ [C₀Cₛ/(C₀+Cₛ)]/G, phase state, interface resistance, and timestep. Near melting, use enthalpy or tangent capacities rather than sensible capacity alone. Do not merely replace pond heat capacity with soil heat capacity while keeping two independent energy balances.</p>
+
+<h2>7. Acceptance and evidence</h2>
+<ul><li>The identical failing hour converges with the original tolerances; record nonlinear iterations, rejected trials, and temperature/flux ranges.</li><li>Both water and energy budgets close, including EcoSIM sources, internal exchange, and column boundaries.</li><li>Then extend across subsequent days and the 200-day case. Passing one restarted hour is insufficient.</li><li>Check frozen, thawed, dry, partially ponded, snow-covered, and future litter cases; retain separate-source ownership.</li></ul>
+<p>Local source references: <a href="../repos/amanzi/src/physics/ats/src/pks/flow/richards_pk.cc">Richards boundary mobility and derivatives</a>, <a href="../repos/amanzi/src/physics/ats/src/pks/flow/constitutive_relations/wrm/rel_perm_evaluator.cc">soil relative permeability</a>, <a href="../repos/amanzi/src/physics/ats/src/pks/flow/constitutive_relations/overland_conductivity/surface_relperm_evaluator.cc">pond mobility</a>, <a href="../repos/amanzi/src/physics/ats/src/pks/ecosim/EcoSIM_ATS_interface.cc">EcoSIM source routing and coverage</a>. External background: <a href="https://amanzi.github.io/ats/v1.5/ats_demos/04_integrated_hydro/integrated_hydro.html">ATS integrated hydrology</a>.</p>
+<footer>Results refer to the local modified checkout, not an upstream ATS release. Documentation and experiments do not alter regression gold files.</footer>
+</main></body></html>

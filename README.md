@@ -3,6 +3,23 @@
 Download and build ATS in Ubuntu 24.04 using a compiler-container workflow,
 adapted from [EcoSIM's Docker launcher](https://github.com/EcoSIM-model/EcoSIM/blob/main/run_docker.sh).
 
+## Task skills
+
+The existing [download](.agents/skills/download-ats/SKILL.md),
+[build](.agents/skills/build-ats-ecosim/SKILL.md), and
+[named-case reproduction](.agents/skills/reproduce-case/SKILL.md) workflows are
+complemented by these source-checked skills:
+
+| Skill | Example request |
+| --- | --- |
+| [Configure a coupled case](.agents/skills/configure-ats-ecosim-case/SKILL.md) | Set up prescribed phenology and map PFTs onto an existing surface mesh |
+| [Prepare hourly forcing](.agents/skills/prepare-ats-ecosim-forcing/SKILL.md) | Convert existing DayMet data to hourly ATS–EcoSIM forcing and validate it |
+| [Extend the interface](.agents/skills/extend-ats-ecosim-interface/SKILL.md) | Pass a new variable between ATS and EcoSIM with matching C/Fortran layouts |
+| [Diagnose coupling behavior](.agents/skills/diagnose-ats-ecosim-coupling/SKILL.md) | Investigate surface-temperature oscillations, snowmelt, or a failed timestep |
+
+Each skill links to focused references and identifies its checked source
+revisions. Recheck the selected code before applying examples to another version.
+
 ## Reproduce the pond–soil coupling case
 
 With Git and Docker installed and Docker running, clone the branch containing
