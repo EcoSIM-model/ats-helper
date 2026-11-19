@@ -250,7 +250,34 @@ class JobTests(unittest.TestCase):
             self.assertEqual(matched[0].run_dir, m.pairs_dir / "pft_grass_lai1" / "ats")
         self.assertEqual(jobs.summary_file(m, "standalone"), m.pairs_dir / "standalone_summary.txt")
         with self.assertRaisesRegex(manifest.ManifestError, "unknown tests"):
-            jobs.build_jobs(m, "standalone", only=["bare_ground"])         # the baseline has no standalone pair
+            jobs.build_jobs(m, "standalone", only=["not_a_test"])
+        # the baseline (bare ground) is a test of every backend; its pair files are optional
+        bare = jobs.build_jobs(m, "standalone", only=["bare_ground"])
+        has_pair = (m.pairs_dir / "bare_ground" / "standalone.namelist").is_file()
+        self.assertEqual(len(bare), 1 if has_pair else 0)
+        if has_pair:
+            self.assertEqual(bare[0].run_dir, m.pairs_dir / "bare_ground" / "standalone")
+        self.assertEqual(len(jobs.build_jobs(m, "ats-matched", only=["bare_ground"])),
+                         1 if (m.pairs_dir / "bare_ground" / "ats_match.xml").is_file() else 0)
+
+
+@unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4")),
+                     "pairs need numpy, h5py and netCDF4")
+class BareNamelistTests(unittest.TestCase):
+    def test_plant_free_namelist(self):
+        from ats_ecosim_pairs import pairs
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = ["PSI_vr", "RootH2OUptake_vr"]
+            pairs.write_namelist(Path(tmp) / "bare", "bare", "pft.nc", 729, (1981, 1982), "ghg.nc", hist, plants=False)
+            pairs.write_namelist(Path(tmp) / "veg", "veg", "pft.nc", 729, (1981, 1982), "ghg.nc", hist)
+            bare, veg = [(Path(tmp) / n).read_text() for n in ("bare", "veg")]
+            self.assertIn("plant_model     = .false.", bare)
+            self.assertIn("ldo_sp_mode     = .false.", bare)
+            self.assertNotIn("sp_phenol_in       =", bare)
+            self.assertIn("hist_fincl1 = 'PSI_vr'\n", bare)             # no plant fields
+            self.assertIn("plant_model     = .true.", veg)
+            self.assertIn("sp_phenol_in       = '../sp_phenol.nc'", veg)
+            self.assertIn("'RootH2OUptake_vr'", veg)
 
 
 @unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4", "matplotlib")),

@@ -12,3 +12,4 @@ __pycache__/
 /cases/pft_tests/*.log
 /cases/pft_tests/suite_summary.txt
 /cases/pft_tests/pairs/*_summary.txt
+/cases/pft_tests/_diag_*/

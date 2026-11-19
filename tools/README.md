@@ -13,10 +13,10 @@ watchdog, and writes a comparison report. A suite is described by one manifest, 
 | command | what it does | needs |
 |---|---|---|
 | `inputs` | `input/<test>.xml` from the template, the sweep's edits and an optional profile | standard library |
-| `pairs` | `pairs/`: standalone grid, climate, phenology and namelist per test, the graded exodus column, matched ATS variants `pairs/<test>/ats_match.xml`, and a README of what is and is not matched | numpy, h5py, netCDF4, the ATS meshing tools |
+| `pairs` | `pairs/`: standalone grid, climate, phenology and namelist per test, the graded exodus column, matched ATS variants `pairs/<test>/ats_match.xml`, and a README of what is and is not matched; the manifest's baseline (bare ground) gets a plant-free pair on the same column (`plant_model = .false.`, no phenology file) | numpy, h5py, netCDF4, the ATS meshing tools |
 | `run` | runs the tests (ATS or standalone), notes failures, starts the next test | standard library |
 | `summarize` | re-evaluates finished runs from their logs, runs nothing | standard library |
-| `report` | `pairs/report/index.html` (figures embedded), `figures/*.png`, `report.json` | numpy, h5py, netCDF4, matplotlib |
+| `report` | `pairs/report/index.html` (figures embedded), `figures/*.png`, `report.json`; and `bare_ground.html` / `.json` for the baseline pair when it has been run (`--only bare_ground` for that report alone) | numpy, h5py, netCDF4, matplotlib |
 
 `run` and `summarize` use only the standard library, so with `--container NAME` they run inside that Docker
 container (the workspace is `/ats-helper` there) where `ats` and the standalone EcoSIM executable are, while

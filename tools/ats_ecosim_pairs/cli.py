@@ -5,6 +5,7 @@
     python tools/ats_pairs.py run       SUITE ats|ats-matched|standalone [--jobs N] [--only T ...] [--container NAME]
     python tools/ats_pairs.py summarize SUITE ats|ats-matched|standalone [--only T ...] [--container NAME]
     python tools/ats_pairs.py report    SUITE [--ats-kind matched|suite] [--only T ...] [--check]
+                                        (also pairs/report/<baseline>.html when the baseline has a pair)
 
 SUITE is the manifest, for example cases/pft_tests/suite.json. `run` and `summarize` need only the
 standard library; with --container NAME they run inside that Docker container (where the executables are)
@@ -124,8 +125,15 @@ def main(argv=None):
         return 0
 
     if args.command == "report":
-        from . import report                                  # needs numpy, h5py, netCDF4, matplotlib
-        return report.build_report(m, args.ats_kind, only, args.out, args.check)
+        from . import report, report_bare                     # needs numpy, h5py, netCDF4, matplotlib
+        base = (m.ats.get("baseline") or {}).get("name")
+        status = 0
+        if not only or (only - {base}):
+            status = report.build_report(m, args.ats_kind, (only - {base}) if only else None, args.out, args.check)
+        if base and (not only or base in only) and args.ats_kind == "matched":
+            if report_bare.build(m, args.out) and only:               # an explicit request that could not be met
+                status = status or 1
+        return status
 
     if args.command == "run":
         job_list = jobs_mod.build_jobs(m, args.backend, only, args.ats, args.np, args.exe)

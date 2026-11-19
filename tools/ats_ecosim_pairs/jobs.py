@@ -3,6 +3,9 @@
   ats           input/<test>.xml                  run in <suite>/<test>/             suite_summary.txt
   ats-matched   pairs/<test>/ats_match.xml        run in pairs/<test>/ats/           pairs/ats_match_summary.txt
   standalone    pairs/<test>/standalone.namelist  run in pairs/<test>/standalone/    pairs/standalone_summary.txt
+
+The manifest's baseline (bare ground) is a test of every backend; its pair is optional, so a missing
+pair file is skipped for ats-matched and standalone instead of being an error.
 """
 
 import re
@@ -24,11 +27,11 @@ def build_jobs(m, backend, only=None, ats_exe="ats", np=1, standalone_exe=DEFAUL
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS}")
     jobs = []
-    for test in m.tests(only, baseline=(backend == "ats")):
+    for test in m.tests(only):
         if backend in ("ats", "ats-matched"):
             xml = m.inputs_dir / f"{test.name}.xml" if backend == "ats" else m.pairs_dir / test.name / "ats_match.xml"
             if not xml.is_file():
-                if require_inputs:
+                if require_inputs and not (test.is_baseline and backend != "ats"):
                     hint = "inputs" if backend == "ats" else "pairs"
                     raise FileNotFoundError(f"{xml} not found; write it with the '{hint}' command first")
                 continue
@@ -38,7 +41,7 @@ def build_jobs(m, backend, only=None, ats_exe="ats", np=1, standalone_exe=DEFAUL
         else:
             namelist = m.pairs_dir / test.name / "standalone.namelist"
             if not namelist.is_file():
-                if require_inputs:
+                if require_inputs and not test.is_baseline:
                     raise FileNotFoundError(f"{namelist} not found; write it with the 'pairs' command first")
                 continue
             hours = int(re.search(r"stop_n\s*=\s*(\d+)", namelist.read_text()).group(1)) * 24

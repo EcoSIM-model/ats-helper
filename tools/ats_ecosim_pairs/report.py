@@ -111,7 +111,7 @@ def load_ats(test, kind):
         with h5py.File(vis, "r") as f:
             g = f["temperature"]
             keys = sorted(g.keys(), key=int)
-            days = np.array([g[k].attrs["Time"] * 365.0 for k in keys])
+            days = np.array([g[k].attrs["Time"] * 365.25 for k in keys])      # ATS stores years of 365.25 days
             cells = np.array([np.asarray(g[k][...]).ravel() for k in keys])
         if len(keys) > 100 and np.allclose(np.diff(days)[:50], 1.0, atol=1e-3):
             top = int(np.argmax(cells.std(axis=0)))      # the cell with the largest variability is the top one
@@ -127,6 +127,8 @@ def load_sa(test):
         d = netCDF4.Dataset(fn)
         d.set_auto_mask(False)
         for k in names:
+            if k not in d.variables:                 # for example the transpiration of a run without plants
+                continue
             v = np.asarray(d[k][...], dtype=float)
             v = v[:, 0, 0] if k == "TEMP_vr" else v.reshape(v.shape[0], -1)[:, 0]
             if k == "tPRECIP_col":
@@ -135,6 +137,11 @@ def load_sa(test):
                 arr.setdefault(k, []).append(v)
         d.close()
     a = {k: np.concatenate(v)[:HOURS] for k, v in arr.items()}
+    missing = [k for k in names if k not in a and k != "tPRECIP_col"]
+    if missing:
+        print(f"  {test}: standalone history has no {missing}; taken as zero")
+        for k in missing:
+            a[k] = np.zeros(HOURS)
     dens = a["SNOWDENS_col"]
     depth = np.where((dens > 0) & (dens < 1000), a["SNOWPACK_col"] / np.where(dens > 0, dens, 1), 0.0)
     return {
