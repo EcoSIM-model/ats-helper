@@ -1,6 +1,6 @@
 {
   "name": "pft_tests",
-  "description": "ATS-EcoSIM column tests with prescribed phenology over vegetation types and LAI, paired with standalone EcoSIM runs. Provenance: templates/ and data/daymet_TaylorRiverCO_hourly.h5 (sha256 862ef83360774c4b2ce09160c93f4f543cedba89f7b4035f46f492a430a1fe58) come from ats-regression-tests 13_ecosim, branch agraus/smoke_tests, commit 44d2023.",
+  "description": "ATS-EcoSIM column tests with prescribed phenology over vegetation types and LAI, paired with standalone EcoSIM runs. Generate the pairs with --profile matched-start: both models then start at 1.00 C and the ATS bottom temperature is 274.429 K (initial + 0.28 K, EcoSIM deep source temperature). Provenance: templates/ and data/daymet_TaylorRiverCO_hourly.h5 (sha256 862ef83360774c4b2ce09160c93f4f543cedba89f7b4035f46f492a430a1fe58) come from ats-regression-tests 13_ecosim, branch agraus/smoke_tests, commit 44d2023.",
   "ats": {
     "template": "templates/ecosim_prescribed_phenology_evergreen_hourly.xml",
     "baseline": {"name": "bare_ground", "template": "templates/ecosim_freeze_thaw_hourly.xml"},
@@ -26,6 +26,15 @@
         {"name": "semi-implicit surface heat exchange", "type": "bool", "value": true}
       ]},
       {"set": "PKs/surface energy/source key", "value": "surface-ecosim_source_linearized"}
+    ],
+    "matched-start": [
+      {"add_after": "PKs/EcoSIM for ATS/engine", "params": [
+        {"name": "shared surface layer", "type": "bool", "value": false},
+        {"name": "semi-implicit surface heat exchange", "type": "bool", "value": true}
+      ]},
+      {"set": "PKs/surface energy/source key", "value": "surface-ecosim_source_linearized"},
+      {"set": "PKs/subsurface energy/initial conditions/value", "value": 274.15},
+      {"set": "PKs/subsurface energy/boundary conditions/temperature/bottom/boundary temperature/function-constant/value", "value": 274.429}
     ]
   },
   "standalone": {

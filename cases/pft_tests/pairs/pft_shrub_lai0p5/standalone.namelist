@@ -1,0 +1,53 @@
+&regression_test
+ cells = 1
+/
+
+&ecosim
+case_name          = 'pft_shrub_lai0p5'
+do_regression_test = .false.
+pft_file_in        = '../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc'
+grid_file_in       = '../../common/grid_match.nc'
+pft_mgmt_in        = 'NO'
+sp_phenol_in       = '../sp_phenol.nc'      ! PFT, population and geometry
+clm_hour_file_in   = '../../common/clim_match.nc'
+clm_factor_in      = 'NO'
+soil_mgmt_in       = 'NO'
+atm_ghg_in         = '../../common/fatm_hist_GHGs_1750-2023.nc'
+
+lverbose        = .false.
+ldo_sp_mode     = .true.
+disp_planttrait = .true.
+plant_model     = .true.
+microbial_model = .false.
+soichem_model   = .false.
+
+start_date   = '19810101000000'
+grid_mode    = 3
+continue_run = .false.
+forc_periods = 1981,1982,1
+
+hist_fincl1 = 'PSI_vr','VSPore_vr','rIceFLP_vr','RootH2OUptake_vr'
+
+NPXS=30,30,30
+NPYS=10,10,10
+NCYC_LITR=30
+NCYC_SNOW=20
+hist_mfilt  = 17496
+hist_nhtfrq = 1
+/
+
+&bbgcforc
+/
+
+&Microbes
+/
+
+&ecosim_time
+rest_opt    = 'never'
+rest_frq    = 1
+delta_time  = 3600.
+stop_n      = 729
+stop_option = 'ndays'
+diag_frq    = 1
+diag_opt    = 'nsteps'
+/
