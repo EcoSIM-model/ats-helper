@@ -1,9 +1,8 @@
 """Comparison report of the bare-ground pair: ATS-EcoSIM against standalone EcoSIM, no plants.
 
-Reads pairs/<baseline>/ats (the matched ATS variant) and pairs/<baseline>/standalone, and for context the
-suite's own run <baseline>/ (the original ATS input, not on the graded column). Writes
-pairs/report/<baseline>.html (figure embedded), pairs/report/figures/<baseline>_timeseries.png and
-pairs/report/<baseline>.json.
+Reads pairs/<test>/ats (the matched ATS variant) and pairs/<test>/standalone of a test without prescribed
+phenology. Writes pairs/report/<test>.html (figure embedded), pairs/report/figures/<test>_timeseries.png and
+pairs/report/<test>.json.
 
 With no plants there is no transpiration or canopy evaporation, so the quantities are snow depth and its
 seasons, the skin and soil temperatures, the ground heat flux and the vapor flux from the ground and snow.
@@ -141,24 +140,19 @@ def html_page(m, health, health_orig, fig_b64, out):
         "</body></html>")
 
 
-def build(m, out=None):
-    """write the report of the bare-ground pair; returns an exit status"""
+def build(m, base, out=None):
+    """write the report of the bare-ground pair `base`; returns an exit status"""
     R.configure(m)
-    base = (m.ats.get("baseline") or {}).get("name")
-    if not base:
-        print("the suite has no baseline test")
-        return 1
     out = Path(out) if out else R.PAIRS / "report"
     ats_dir, sa_dir = R.PAIRS / base / "ats", R.PAIRS / base / "standalone"
     if not (ats_dir / "surf_prop.dat").is_file() or not list(sa_dir.glob("*.ecosim.h0.*.nc")):
         print(f"skipping {base}: missing ATS or standalone output in pairs/{base}")
         return 1
     ats, sa = R.load_ats(base, "matched"), R.load_sa(base)
-    orig = R.load_ats(base, "suite") if (R.SUITE_DIR / base / "surf_prop.dat").is_file() else None
     shift, scores = R.best_shift([(ats["air"], sa["air"])], "mae")
     print(f"alignment shift {shift:+d} h {scores}")
-    m_ = metrics(base, ats, sa, shift, orig)
-    m_["health"], m_["health_original"] = R.ats_health(base, "matched"), R.ats_health(base, "suite")
+    m_ = metrics(base, ats, sa, shift, None)
+    m_["health"], m_["health_original"] = R.ats_health(base, "matched"), {}
     fig = R.png(figure(m_, f"{base} - ATS (matched variant) vs standalone EcoSIM, no plants"),
                 out / "figures" / f"{base}_timeseries.png")
     html_page(m_, m_["health"], m_["health_original"], fig, out / f"{base}.html")

@@ -1,4 +1,4 @@
-"""Tests of tools/ats_ecosim_pairs: XML edits, manifest, rendering, run classification. No model is run."""
+"""Tests of tools/ats_ecosim_pairs: XML edits, case folders, parameter reading, pair generation, run classification. No model is run."""
 import importlib.util
 import json
 import stat
@@ -12,9 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from ats_ecosim_pairs import jobs, manifest, render, runner, xmledit  # noqa: E402
+from ats_ecosim_pairs import case as case_mod, jobs, render, runner, xmledit  # noqa: E402
 
-SUITE = ROOT / "cases" / "pft_tests" / "suite.json"
+CASE = ROOT / "cases" / "pft_tests"
+ECOSIM = ROOT / "repos" / "dev" / "ecosim"
+ATS = ROOT / "repos" / "dev" / "ats"
 
 XML = textwrap.dedent("""\
     <ParameterList name="Main" type="ParameterList">
@@ -84,66 +86,68 @@ class XmlEditTests(unittest.TestCase):
             xmledit.edit_text(XML, [{"remove": "PKs/eco/file"}])
 
 
-class ManifestTests(unittest.TestCase):
-    def write(self, tmp, data, templates=("t.xml",)):
-        for t in templates:
-            (Path(tmp) / t).write_text(XML)
-        (Path(tmp) / "suite.json").write_text(json.dumps(data))
-        return Path(tmp) / "suite.json"
+class CaseTests(unittest.TestCase):
+    def folder(self, tmp, names=("b", "a")):
+        for n in names:
+            (Path(tmp) / f"{n}.xml").write_text("<ParameterList/>")
+        return Path(tmp)
 
-    def good(self):
-        return {"name": "x", "ats": {"template": "t.xml", "forcing": "f.h5", "data_dir": "data"},
-                "name_pattern": "t_{group}_{lai}", "sweep": [{"group": "a", "lai": [1, 0.5]}]}
-
-    def test_the_pft_suite_expands_in_order_with_the_baseline_last(self):
-        m = manifest.load(SUITE)
-        names = [t.name for t in m.tests()]
-        self.assertEqual(len(names), 14)
-        self.assertEqual(names[0], "pft_deciduous_lai2")
-        self.assertEqual(names[-1], "bare_ground")
-        self.assertIn("pft_grass_lai0p5", names)
-        self.assertEqual([t.axis for t in m.tests(baseline=False)][:2], [("lai", 2), ("lai", 4)])
-        self.assertEqual(len(m.tests(baseline=False)), 13)
-
-    def test_unknown_keys_missing_files_and_duplicate_names_are_errors(self):
+    def test_every_xml_of_the_folder_is_a_test_in_file_name_order(self):
         with tempfile.TemporaryDirectory() as tmp:
-            data = self.good()
-            self.assertEqual([t.name for t in manifest.load(self.write(tmp, data)).tests()], ["t_a_1", "t_a_0p5"])
-            with self.assertRaisesRegex(manifest.ManifestError, "unknown keys"):
-                manifest.load(self.write(tmp, {**data, "sweeep": []}))
-            with self.assertRaisesRegex(manifest.ManifestError, "template not found"):
-                manifest.load(self.write(tmp, {**data, "ats": {**data["ats"], "template": "missing.xml"}}))
-            with self.assertRaisesRegex(manifest.ManifestError, "not unique"):
-                manifest.load(self.write(tmp, {**data, "name_pattern": "same", "sweep": [{"group": "a", "lai": [1, 2]}]}))
-            with self.assertRaisesRegex(manifest.ManifestError, "unknown tests"):
-                manifest.load(self.write(tmp, data)).tests(only=["nope"])
+            c = case_mod.load(self.folder(tmp, ("b", "a", "c")))
+            self.assertEqual([t.name for t in c.tests()], ["a", "b", "c"])
+            self.assertEqual([t.name for t in c.tests(only=["c", "a"])], ["a", "c"])
+            self.assertEqual(c.pairs_dir, Path(tmp).resolve() / "pairs")
+            with self.assertRaisesRegex(case_mod.CaseError, "unknown tests"):
+                c.tests(only=["nope"])
+
+    def test_a_folder_without_inputs_or_a_missing_folder_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(case_mod.CaseError, "no ATS-EcoSIM input"):
+                case_mod.load(tmp)
+            with self.assertRaisesRegex(case_mod.CaseError, "not found"):
+                case_mod.load(Path(tmp) / "missing")
+
+    def test_group_lai_and_bare_flag_come_from_the_pair_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = case_mod.load(self.folder(tmp, ("veg", "bare")))
+            self.assertEqual([t.group for t in c.tests()], [None, None])      # before `pair` ran
+            for name, meta in (("veg", {"bare": False, "group": "grass", "lai": 3.0}), ("bare", {"bare": True, "group": None, "lai": 0.0})):
+                (Path(tmp) / "pairs" / name).mkdir(parents=True)
+                (Path(tmp) / "pairs" / name / "pair.json").write_text(json.dumps(meta))
+            self.assertEqual([(t.name, t.group, t.axis, t.is_baseline) for t in c.tests()],
+                             [("bare", None, ("lai", 0.0), True), ("veg", "grass", ("lai", 3.0), False)])
+            self.assertEqual([t.name for t in c.tests(baseline=False)], ["veg"])
 
 
-@unittest.skipUnless(SUITE.is_file() and (ROOT / "repos/dev/ecosim/input_data").is_dir(), "needs the PFT suite and the dev EcoSIM tree")
-class RenderTests(unittest.TestCase):
-    def test_rendered_inputs_equal_the_committed_suite_inputs(self):
-        m = manifest.load(SUITE)
-        checked = 0
-        for test in m.tests(only=["pft_grass_lai0p5", "pft_evergreen_lai4", "bare_ground"]):
-            current = m.inputs_dir / f"{test.name}.xml"
-            if not current.is_file():
-                continue
-            text = render.render_test(m, test, m.root / test.name, profile="dev-pk")
-            self.assertEqual(text, current.read_text(), test.name)
-            checked += 1
-        self.assertGreater(checked, 0)
+class ParameterTests(unittest.TestCase):
+    def parameters(self, name):
+        root = xmledit.parse_xml((CASE / f"{name}.xml").read_text()).getroot()
+        return render.ats_parameters(root, CASE)
 
-    def test_the_dev_profile_changes_only_what_it_says(self):
-        m = manifest.load(SUITE)
-        test = m.tests(only=["pft_shrub_lai1"])[0]
-        plain = render.render_test(m, test, m.root / test.name)
-        dev = render.render_test(m, test, m.root / test.name, profile="dev-pk")
-        extra = set(dev.splitlines()) - set(plain.splitlines())
-        self.assertEqual(len(extra), 3)
-        self.assertTrue(any("shared surface layer" in line for line in extra))
-        self.assertTrue(any("surface-ecosim_source_linearized" in line for line in extra))
-        with self.assertRaisesRegex(manifest.ManifestError, "no profile"):
-            render.render_test(m, test, m.root / test.name, profile="nope")
+    @unittest.skipUnless((CASE / "pft_grass_lai1.xml").is_file(), "needs the pft_tests case")
+    def test_a_vegetated_input_gives_its_canopy_and_files(self):
+        p = self.parameters("pft_grass_lai1")
+        self.assertTrue(p["prescribed"])
+        self.assertEqual((p["vegetation_type"], p["lai"], p["sai"], p["npfts"]), (77, 1.0, 0.1, 1))
+        self.assertEqual((p["depth"], p["ndays"]), (10.0, 729.0))
+        self.assertTrue(p["forcing"].endswith("cases/pft_tests/data/daymet_TaylorRiverCO_hourly.h5"))
+        self.assertEqual(Path(p["engine_file"]).name, "ecosim_pftpar_20261021.nc")
+
+    @unittest.skipUnless((CASE / "bare_ground.xml").is_file(), "needs the pft_tests case")
+    def test_a_bare_ground_input_is_not_prescribed(self):
+        self.assertFalse(self.parameters("bare_ground")["prescribed"])
+
+    @unittest.skipUnless((CASE / "bare_ground.xml").is_file(), "needs the pft_tests case")
+    def test_inputs_that_cannot_be_matched_are_refused_with_the_reason(self):
+        text = (CASE / "bare_ground.xml").read_text()
+        for label, broken, message in (
+                ("a hillslope", text.replace('value="{1, 1, 100}"', 'value="{4, 1, 100}"'), "single column"),
+                ("a missing forcing file", text.replace('name="starting year"', 'name="start year"'), "forcing"),
+                ("a missing soil", text.replace('name="base_porosity"', 'name="porosity_x"'), "base_porosity")):
+            root = xmledit.parse_xml(broken).getroot()
+            with self.assertRaisesRegex(case_mod.CaseError, message, msg=label):
+                render.ats_parameters(root, CASE)
 
     def test_end_time(self):
         self.assertEqual(render.end_time_days('name="end time" type="double" value="729.0"/>\n'
@@ -272,26 +276,27 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("1 passed, 1 did not complete", path.read_text())
 
 
-@unittest.skipUnless(SUITE.is_file(), "needs the PFT suite")
 class JobTests(unittest.TestCase):
     def test_backends_use_the_documented_locations(self):
-        m = manifest.load(SUITE)
-        ats = jobs.build_jobs(m, "ats", only=["pft_grass_lai1"], require_inputs=False)
-        self.assertEqual(ats[0].run_dir, m.root / "pft_grass_lai1")
-        matched = jobs.build_jobs(m, "ats-matched", only=["pft_grass_lai1"], require_inputs=False)
-        if matched:
-            self.assertEqual(matched[0].run_dir, m.pairs_dir / "pft_grass_lai1" / "ats")
-        self.assertEqual(jobs.summary_file(m, "standalone"), m.pairs_dir / "standalone_summary.txt")
-        with self.assertRaisesRegex(manifest.ManifestError, "unknown tests"):
-            jobs.build_jobs(m, "standalone", only=["not_a_test"])
-        # the baseline (bare ground) is a test of every backend; its pair files are optional
-        bare = jobs.build_jobs(m, "standalone", only=["bare_ground"])
-        has_pair = (m.pairs_dir / "bare_ground" / "standalone.namelist").is_file()
-        self.assertEqual(len(bare), 1 if has_pair else 0)
-        if has_pair:
-            self.assertEqual(bare[0].run_dir, m.pairs_dir / "bare_ground" / "standalone")
-        self.assertEqual(len(jobs.build_jobs(m, "ats-matched", only=["bare_ground"])),
-                         1 if (m.pairs_dir / "bare_ground" / "ats_match.xml").is_file() else 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in ("a", "b"):
+                (Path(tmp) / f"{n}.xml").write_text("<ParameterList/>")
+            c = case_mod.load(tmp)
+            self.assertEqual(jobs.build_jobs(c, "ats", require_inputs=False), [])
+            with self.assertRaisesRegex(FileNotFoundError, "'pair' command"):
+                jobs.build_jobs(c, "standalone")
+            pair = c.pair_dir("a")
+            (pair).mkdir(parents=True)
+            (pair / "standalone.namelist").write_text("stop_n = 729\n")
+            (pair / "ats_match.xml").write_text('name="end time" type="double" value="729.0"/>\n'
+                                                'name="end time units" type="string" value="d"/>')
+            sa = jobs.build_jobs(c, "standalone", only=["a"])[0]
+            self.assertEqual((sa.run_dir, sa.expected_hours), (pair / "standalone", 729 * 24))
+            ats = jobs.build_jobs(c, "ats", only=["a"])[0]
+            self.assertEqual((ats.run_dir, ats.end_days), (pair / "ats", 729.0))
+            self.assertEqual(jobs.summary_file(c, "ats"), c.pairs_dir / "ats_summary.txt")
+            with self.assertRaisesRegex(case_mod.CaseError, "unknown tests"):
+                jobs.build_jobs(c, "standalone", only=["not_a_test"])
 
 
 @unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4")),
@@ -319,6 +324,79 @@ class BareNamelistTests(unittest.TestCase):
             self.assertIn("plant_model     = .true.", veg)
             self.assertIn("sp_phenol_in       = '../sp_phenol.nc'", veg)
             self.assertIn("'RootH2OUptake_vr'", veg)
+
+
+@unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4")) and ECOSIM.is_dir()
+                     and ATS.is_dir() and (CASE / "pft_grass_lai1.xml").is_file(),
+                     "needs numpy, h5py, netCDF4, the dev EcoSIM and ATS trees and the pft_tests case")
+class PairGenerationTests(unittest.TestCase):
+    """`pair` on a copy of the pft_tests case: one vegetated input, the bare-ground input and any broken one"""
+
+    def case_copy(self, tmp, names=("pft_grass_lai1", "bare_ground")):
+        import shutil
+        root = Path(tmp) / "mycase"
+        root.mkdir()
+        shutil.copytree(CASE / "data", root / "data")
+        for n in names:
+            shutil.copy2(CASE / f"{n}.xml", root / f"{n}.xml")
+        return case_mod.load(root)
+
+    def generate(self, c, **options):
+        import contextlib, io
+        from ats_ecosim_pairs import pairs
+        with contextlib.redirect_stdout(io.StringIO()):
+            return pairs.generate_pairs(c, options, ECOSIM, ATS, only=options.pop("only", None))
+
+    def test_pairs_are_written_for_every_input_with_the_matched_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.case_copy(tmp)
+            self.generate(c)
+            veg, bare = c.pair_dir("pft_grass_lai1"), c.pair_dir("bare_ground")
+            for f in ("ats_match.xml", "column.exo", "grid.nc", "clim.nc", "sp_phenol.nc", "standalone.namelist", "pair.json"):
+                self.assertTrue((veg / f).is_file(), f)
+            self.assertFalse((bare / "sp_phenol.nc").exists())                 # bare ground: no phenology file
+            self.assertTrue((c.pairs_dir / "README.md").is_file())
+            meta = json.loads((veg / "pair.json").read_text())
+            self.assertEqual((meta["pft"], meta["group"], meta["row"], meta["lai"], meta["population"]),
+                             ("gr3s43", "grass", 77, 1.0, 300.0))
+            self.assertEqual((meta["start_temperature"], meta["bottom_temperature"]), (274.15, 274.43))
+            self.assertEqual(meta["input_start_temperature"], 260.0)           # what the input had
+            xml = (veg / "ats_match.xml").read_text()
+            self.assertIn('value="274.15"', xml)
+            self.assertIn('value="274.43"', xml)
+            self.assertIn('name="EcoSIM precipitation" type="bool" value="true"', xml)
+            self.assertIn("read mesh file", xml)
+            # the data file is rebased: relative to pairs/<test>/ats, it resolves to the case's data folder
+            import re
+            rel = re.search(r'name="file" type="string" value="([^"]*daymet[^"]*)"', xml).group(1)
+            self.assertTrue((veg / "ats" / rel).resolve().is_file())
+            self.assertIn("'../grid.nc'", (veg / "standalone.namelist").read_text())
+            self.assertIn("plant_model     = .false.", (bare / "standalone.namelist").read_text())
+            self.assertIn('name="engine input file" type="string" value="Null"', (bare / "ats_match.xml").read_text())
+            self.assertTrue(json.loads((bare / "pair.json").read_text())["bare"])
+
+    def test_keeping_the_inputs_own_start_and_overriding_the_population(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.case_copy(tmp, ("pft_grass_lai1",))
+            from ats_ecosim_pairs import pairs
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()):
+                pairs.generate_pairs(c, {"start_temperature": "xml"}, ECOSIM, ATS, populations={"grass": 50.0})
+            meta = json.loads((c.pair_dir("pft_grass_lai1") / "pair.json").read_text())
+            self.assertEqual((meta["start_temperature"], meta["population"]), (260.0, 50.0))
+            self.assertIn('value="260.00"', (c.pair_dir("pft_grass_lai1") / "ats_match.xml").read_text())
+            self.assertEqual(meta["bottom_temperature"], meta["input_bottom_temperature"])
+
+    def test_a_broken_input_stops_everything_before_anything_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.case_copy(tmp)
+            bad = c.root / "zz_hillslope.xml"
+            bad.write_text((CASE / "bare_ground.xml").read_text().replace('value="{1, 1, 100}"', 'value="{4, 1, 100}"'))
+            with self.assertRaisesRegex(case_mod.CaseError, "zz_hillslope.xml.*single column"):
+                self.generate(c)
+            self.assertFalse(c.pairs_dir.exists())
+            self.generate(c, only=["pft_grass_lai1"])                           # the good one alone works
+            self.assertFalse((c.pairs_dir / "README.md").exists())              # a subset does not write the README
 
 
 @unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4", "matplotlib")),

@@ -1,8 +1,7 @@
 """Automated comparison report: ATS-EcoSIM against standalone EcoSIM for the tests of a suite.
 
-Reads, for each test of the manifest's sweep that has both:
+Reads, for each vegetated test of the case folder that has both:
   ATS        pairs/<test>/ats/        surf_prop.dat (hourly), ats_vis_data.h5 (daily soil profiles)
-             (ats_kind "suite": the suite run <test>/ instead of the matched variant)
   standalone pairs/<test>/standalone/ the EcoSIM history files
 and writes pairs/report/index.html (self-contained, figures embedded), pairs/report/figures/*.png
 and pairs/report/report.json (all metrics).
@@ -12,7 +11,7 @@ flux and cumulative transpiration; daily scatter plots, the summer diurnal cycle
 totals, correlations, snow seasons, temperature bias/RMSE and the health of the ATS run. Across
 tests: totals, correlation, snow and temperature differences against the sweep axis (LAI) for each group.
 
-The agreement thresholds (DEFAULT_TOL below, overridden by the manifest's compare.thresholds) are
+The agreement thresholds (DEFAULT_TOL below) are
 placeholders for "ballpark": green = within the first, amber = within the second, red = outside. They
 grade the matching of the two models, they are not a statement about either model's correctness.
 
@@ -36,8 +35,8 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# set by build_report() from the manifest
-PAIRS = FORCING = SUITE_DIR = None
+# set by configure() from the case folder
+PAIRS = META = SUITE_DIR = None
 AXIS_LABEL = "LAI"
 NDAYS = 729
 HOURS = NDAYS * 24
@@ -310,7 +309,7 @@ def compute(test, ats, sa, shifts, kind):
     m["heat_mean_sa"] = float(np.nanmean(sa["heat"]))
     m["heat_corr"] = corr(daily_mean(A["heat"]), daily_mean(sa["heat"]))
     # forcing consistency
-    with h5py.File(FORCING, "r") as f:
+    with h5py.File(META[test]["forcing"], "r") as f:
         rain = f["precipitation rain [m s^-1]"][:HOURS]
         snow = f["precipitation snow [m SWE s^-1]"][:HOURS]
     m["precip_forcing_mm"] = float(np.sum((rain + snow) * 1000 * 3600))
@@ -482,8 +481,8 @@ def render_html(results, kind, shifts, overview_b64, notes, out):
          f"<code>pairs/&lt;test&gt;/standalone</code>; {len(results)} tests, 729 days, hourly.</p>",
          f"<p><b>Graded quantities:</b> <span class='green'>&nbsp;{counts['green']} green&nbsp;</span> "
          f"<span class='amber'>&nbsp;{counts['amber']} amber&nbsp;</span> <span class='red'>&nbsp;{counts['red']} red&nbsp;</span>. "
-         "Thresholds are placeholders for &ldquo;ballpark&rdquo; and can be edited in <code>TOL</code> at the top of "
-         "<code>compare_pft_pairs.py</code>; they grade how closely the two models match, not which is right.</p>",
+         "Thresholds are placeholders for &ldquo;ballpark&rdquo; and can be edited in <code>DEFAULT_TOL</code> at the top of "
+         "<code>tools/ats_ecosim_pairs/report.py</code>; they grade how closely the two models match, not which is right.</p>",
          "<div class='note'><b>Read before interpreting.</b> "
          f"ATS flux observations are aligned to the standalone hourly records with a shift of {shifts['flux']:+d} h, and states with "
          f"{shifts['state']:+d} h (chosen to maximise agreement across all tests). "
@@ -554,13 +553,22 @@ def setup_notes():
 
 # ---------------------------------------------------------------------------
 def configure(m):
-    """take the suite-specific paths, thresholds and group colors from the manifest"""
-    global PAIRS, FORCING, SUITE_DIR, TOL, COLORS, AXIS_LABEL
-    PAIRS, FORCING, SUITE_DIR = m.pairs_dir, m.forcing, m.root
+    """take the case folder's paths, run length and group colors from its pairs"""
+    global PAIRS, META, SUITE_DIR, TOL, COLORS, AXIS_LABEL, NDAYS, HOURS
+    PAIRS, SUITE_DIR = m.pairs_dir, m.root
+    META = {t.name: m.meta(t.name) for t in m.tests()}
+    missing = [n for n, v in META.items() if v is None]
+    if missing:
+        raise SystemExit(f"no pair for {missing}: run the `pair` command first")
+    lengths = {v["ndays"] for v in META.values()}
+    if len(lengths) != 1:
+        raise SystemExit(f"the tests of one report must have the same run length; found {sorted(lengths)} days")
+    NDAYS = int(lengths.pop())
+    HOURS = NDAYS * 24
     TOL = dict(DEFAULT_TOL)
     for key, (green, amber) in m.thresholds.items():
         if key not in TOL:
-            raise ValueError(f"unknown threshold {key!r} in the manifest; known: {sorted(TOL)}")
+            raise ValueError(f"unknown threshold {key!r}; known: {sorted(TOL)}")
         TOL[key] = (TOL[key][0], float(green), float(amber), TOL[key][3])
     tests = m.tests(baseline=False)
     groups = list(dict.fromkeys(t.group for t in tests))

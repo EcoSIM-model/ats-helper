@@ -1,26 +1,29 @@
-"""Matched standalone EcoSIM cases (and matched ATS variants) for the tests of a suite.
+"""Matched standalone EcoSIM cases (and matched ATS inputs) for the ATS-EcoSIM inputs of a case folder.
 
 Built on make_standalone_match.py of ats-regression-tests (13_ecosim), which matches one ATS-EcoSIM column
-to one standalone EcoSIM column. For every test of the manifest this writes, under <suite>/pairs/:
+to one standalone EcoSIM column. For every <test>.xml of the case folder this writes pairs/<test>/:
 
-  common/column_graded<N>.exo       column mesh for the ATS variants (N graded layers)
-  common/grid_match.nc              standalone grid, site and soil (EcoSIM grid file)
-  common/clim_match.nc              standalone hourly climate, from the suite's forcing file
-  common/<ghg file>                 atmospheric composition (copy from EcoSIM input_data)
-  <test>/ats_match.xml              the test's ATS input on the graded column, EcoSIM partitions rain/snow
-  <test>/sp_phenol.nc               standalone prescribed phenology: PFT, constant LAI, SAI, height, population
-  <test>/standalone.namelist        standalone EcoSIM namelist
-  README.md                         what is and is not matched
+  ats_match.xml          the input on the graded column: file names rebased, EcoSIM partitions rain and snow,
+                         the matched start temperature and bottom temperature
+  column.exo             graded column mesh for ats_match.xml
+  grid.nc                standalone grid, site and soil (EcoSIM grid file)
+  clim.nc                standalone hourly climate, from the forcing file the input names
+  <ghg file>             atmospheric composition (copy from EcoSIM input_data)
+  sp_phenol.nc           standalone prescribed phenology: PFT, constant LAI, SAI, height, population
+  standalone.namelist    standalone EcoSIM namelist (plant-free for an input without prescribed phenology)
+  pair.json              what was matched (read by the report)
+and pairs/README.md with what is and is not matched.
 
 Run directories (all paths in the files are relative to them):
   pairs/<test>/ats/                 ats --xml_file=../ats_match.xml
   pairs/<test>/standalone/          ecosim.f90.x ../standalone.namelist
 
-Values come from the rendered ATS input (soil, column, run length, canopy, EcoSIM PK settings), from the
-forcing file (site, calendar) and from the manifest's "standalone" section (layers, years, constants).
-Anything fixed here is listed in the README it writes. Needs numpy, h5py and netCDF4.
+Values come from the ATS input (soil, column, run length, canopy, EcoSIM PK settings), from the forcing
+file it names (site, calendar) and from the options (layers, years, constants). Anything fixed here is
+listed in the README it writes. Needs numpy, h5py and netCDF4.
 """
 
+import json
 import os
 import re
 import shutil
@@ -33,6 +36,7 @@ import netCDF4
 import numpy as np
 
 from . import render, xmledit
+from .case import BOTTOM_OFFSET, OPTIONS, CaseError
 from .xmledit import array_values, constant_value, param, parse_xml, plist  # noqa: F401
 
 
@@ -101,6 +105,9 @@ def pft_table(pft_file):
 # ---------------------------------------------------------------------------
 def write_mesh(dz, depth, nlayers, path, ats_src):
     sys.path.append(str(Path(ats_src) / "tools" / "meshing" / "meshing_ats"))
+    tpls = os.environ.get("AMANZI_TPLS_DIR")           # the built TPLs hold the exodus Python wrapper (SEACAS)
+    if tpls:
+        sys.path.append(str(Path(tpls) / "SEACAS" / "lib"))
     try:
         import meshing_ats
     except ImportError as err:
@@ -114,11 +121,22 @@ def write_mesh(dz, depth, nlayers, path, ats_src):
     m3.write_exodus(path)
 
 
-def write_ats_variant(test, ats_text, dz, depth, pair_dir, mesh_path, ndays, years, nlayers):
-    """The test's ATS input on the graded column, with EcoSIM partitioning rain and snow."""
+def write_ats_variant(test, ats_text, dz, depth, pair_dir, mesh_path, ndays, years, nlayers, xml_dir, pft_file):
+    """The test's ATS input on the graded column, with EcoSIM partitioning rain and snow.
+
+    File names of the input are relative to xml_dir; they are rewritten relative to the run directory."""
     ats_run = pair_dir / "ats"
     tree = parse_xml(ats_text)
     root = tree.getroot()
+    for node in root.iter("Parameter"):                # data files, relative to the input's folder
+        name, value = node.get("name"), node.get("value")
+        if name == "engine input file" and pft_file is not None:    # without prescribed phenology the input's own value stays
+            value = os.path.relpath(pft_file, ats_run)
+            if len(value) > 128:
+                raise CaseError(f"the PFT file path {value!r} is longer than 128 characters; EcoSIM truncates it")
+            node.set("value", value)
+        elif name == "file" and value and not os.path.isabs(value):
+            node.set("value", os.path.relpath((Path(xml_dir) / value).resolve(), ats_run))
     # mesh: the graded exodus column (relative to the run directory)
     dom = plist(root, "mesh", "domain")
     for c in list(dom):
@@ -155,7 +173,7 @@ def write_ats_variant(test, ats_text, dz, depth, pair_dir, mesh_path, ndays, yea
         param(plist(root, "visualization", name), "times start period stop").set(
             "value", "{0.0, 86400.0, -1.0}")
     header = (f"<!--\nATS-EcoSIM input of {test} on the graded standalone-match column. Generated by\n"
-              f"make_pft_standalone_pairs.py from the suite input; do not edit.\n"
+              f"tools/ats_pairs.py pair from {test}.xml; do not edit.\n"
               f"{nlayers} graded layers over {depth:g} m, EcoSIM partitions precipitation,\n"
               f"{ndays:g} days from 1 January. The standalone pair labels its years {years[0]}-{years[-1]}.\n"
               f"-->\n\n")
@@ -295,8 +313,8 @@ def write_sp_phenol(path, code, lai, sai, height, population, year):
     Same layout as examples/inputs/ERT/ERT6_sp_phenol_*.nc with one topographic unit.
     """
     d = netCDF4.Dataset(path, "w", format="NETCDF3_CLASSIC")
-    d.title = f"Prescribed phenology of the PFT test {code}: constant LAI and SAI"
-    d.source = "Generated by make_pft_standalone_pairs.py from the PFT test suite"
+    d.title = f"Prescribed phenology of PFT {code}: constant LAI and SAI"
+    d.source = "Generated by tools/ats_pairs.py pair"
     d.createDimension("ntopou", 1)
     d.createDimension("maxpfts", 1)
     d.createDimension("nchar1", 10)
@@ -335,13 +353,13 @@ NAMELIST = """&regression_test
 case_name          = '{name}'
 do_regression_test = .false.
 pft_file_in        = '{pft_file}'
-grid_file_in       = '../../common/grid_match.nc'
+grid_file_in       = '../grid.nc'
 pft_mgmt_in        = 'NO'
 {phenology_file}
-clm_hour_file_in   = '../../common/clim_match.nc'
+clm_hour_file_in   = '../clim.nc'
 clm_factor_in      = 'NO'
 soil_mgmt_in       = 'NO'
-atm_ghg_in         = '../../common/{ghg}'
+atm_ghg_in         = '../{ghg}'
 
 lverbose        = .false.
 ldo_sp_mode     = {plants}
@@ -404,26 +422,160 @@ def write_namelist(path, name, pft_file_rel, ndays, years, ghg, history, plants=
 STANDALONE_ROUGHNESS = 0.02         # m, SoilSurfRoughness_col of a mineral soil in the standalone (Hour1Mod.F90)
 
 
-def write_readme(path, p, s, site, years, plan, cfg, wind_height, wind_source, bare=()):
+
+
+PFT_GROUPS = {"tasp43": "deciduous", "ndlf43": "evergreen", "gr3s43": "grass", "bush43": "shrub"}
+# Living population [plants m-2] of the standalone by group. The ATS input does not give it. Trees and grass use
+# the ERT_SatePhenol values; anything else is an assumption (what the coupled path uses is not established).
+POPULATIONS = {"deciduous": 0.1, "evergreen": 0.1, "grass": 300.0}
+ASSUMED_POPULATION = 1.0
+EDIT_IC = "PKs/subsurface energy/initial conditions/value"
+EDIT_BOTTOM = "PKs/subsurface energy/boundary conditions/temperature/bottom/boundary temperature/function-constant/value"
+
+
+def check_file(path, expect):
+    d = netCDF4.Dataset(path)
+    for name, (lo, hi) in expect.items():
+        v = np.ma.filled(d[name][...].astype(float), np.nan)
+        v = v[np.isfinite(v)]
+        if v.size and (v.min() < lo or v.max() > hi):
+            raise ValueError(f"{path}:{name} range {v.min():g}..{v.max():g} outside {lo:g}..{hi:g}")
+    d.close()
+
+
+def plan_test(test, cfg, ecosim, populations):
+    """Everything the matched pair of one input needs, read from the input; raises CaseError if it cannot be matched."""
+    try:
+        root = parse_xml(test.xml.read_text()).getroot()
+    except ET.ParseError as err:
+        raise CaseError(f"{test.xml.name}: not valid XML ({err})") from None
+    try:
+        p = render.ats_parameters(root, test.xml.parent)
+    except CaseError as err:
+        raise CaseError(f"{test.xml.name}: {err}") from None
+    named = ecosim / "input_data" / Path(p["engine_file"]).name
+    if named.is_file():
+        pft_file = named
+    elif p["prescribed"]:
+        raise CaseError(f"{test.xml.name}: PFT parameter file {named.name} (the input's `engine input file`) "
+                        f"not found in {named.parent} (see --ecosim-src)")
+    else:                                    # bare ground: the standalone still reads a PFT file, the input names none
+        pft_file = ecosim / cfg["pft_file"]
+        if not pft_file.is_file():
+            raise CaseError(f"{test.xml.name}: PFT parameter file not found: {pft_file} (see --ecosim-src)")
+    if not Path(p["forcing"]).is_file():
+        raise CaseError(f"{test.xml.name}: forcing file not found: {p['forcing']}")
+    p["T0_input"], p["bottom_input"] = p["T0"], p["bottom_T"]
+    if cfg["start_temperature"] != "xml":
+        p["T0"] = float(cfg["start_temperature"])
+        if p["bottom_T"] is not None:
+            p["bottom_T"] = round(p["T0"] + BOTTOM_OFFSET, 6)
+    years = cfg["years"]
+    if p["ndays"] != int(p["ndays"]) or p["ndays"] > 365 * len(years):
+        raise CaseError(f"{test.xml.name}: the run is {p['ndays']:g} days; the matched pair needs a whole number "
+                        f"of days within {365 * len(years)} (the standalone years {tuple(years)})")
+    with h5py.File(p["forcing"], "r") as f:
+        site = {k: float(f[k][0]) for k in ("latitude [deg]", "solar noon [h]", "start year",
+                                             "start day of year [0-364]", "start hour [h]")}
+    if site["start day of year [0-364]"] != 0 or site["start hour [h]"] != 0:
+        raise CaseError(f"{test.xml.name}: the forcing must start at 00:00 on 1 January (the standalone does)")
+    veg = None
+    if p["prescribed"]:
+        names, heights = pft_table(pft_file)
+        row = p["vegetation_type"]
+        if not 1 <= row <= len(names):
+            raise CaseError(f"{test.xml.name}: vegetation type {row} is not a row of {pft_file.name} (1..{len(names)})")
+        code, group = names[row - 1], PFT_GROUPS.get(names[row - 1], names[row - 1])
+        given = next((populations[k] for k in (test.name, code, group) if k in populations), None)
+        population = given if given is not None else POPULATIONS.get(group, ASSUMED_POPULATION)
+        veg = dict(code=code, row=row, group=group, lai=p["lai"], sai=p["sai"], height=float(heights[row - 1]),
+                   population=float(population), assumed=given is None and group not in POPULATIONS)
+    dz = layer_thicknesses(p["depth"], cfg["layers"], cfg["top_dz"])
+    s = soil(p, dz, cfg)
+    if not (abs(dz.sum() - p["depth"]) < 1e-9 and len(dz) == cfg["layers"]):
+        raise CaseError(f"{test.xml.name}: the layer thicknesses do not add up to the column depth")
+    if not p["porosity"] > s["fc"] > s["wp"] > p["porosity"] * p["sr"]:
+        raise CaseError(f"{test.xml.name}: field capacity {s['fc']:.4f} and wilting point {s['wp']:.4f} are not "
+                        f"between the porosity {p['porosity']:g} and the residual water content")
+    if not np.all((s["theta0"] > 0.0) & (s["theta0"] < 1.0)):
+        raise CaseError(f"{test.xml.name}: the initial water content must be strictly between 0 and 1")
+    if cfg["wind_height"] is not None:
+        wind, wind_source = float(cfg["wind_height"]), "from the options"
+    elif p["pk_wind_height"] is not None:
+        wind, wind_source = p["pk_wind_height"], "the EcoSIM PK's `wind speed reference height [m]` of the input"
+    else:
+        wind, wind_source = 3.0, "the EcoSIM PK's default `wind speed reference height [m]`, which the input does not set"
+    return dict(test=test, p=p, s=s, dz=dz, site=site, veg=veg, pft_file=pft_file, ats_engine=pft_file if p["prescribed"] else None, wind=wind, wind_source=wind_source)
+
+
+def write_pair(case, plan, cfg, ecosim, ats_src):
+    test, p, s, dz, site, veg = plan["test"], plan["p"], plan["s"], plan["dz"], plan["site"], plan["veg"]
+    years, n = cfg["years"], cfg["layers"]
+    pair = case.pair_dir(test.name)
+    (pair / "ats").mkdir(parents=True, exist_ok=True)
+    (pair / "standalone").mkdir(parents=True, exist_ok=True)
+    mesh = pair / "column.exo"
+    write_mesh(dz, p["depth"], n, mesh, ats_src)
+    write_grid(pair / "grid.nc", s, p, site, ecosim / cfg["grid_template"], cfg)
+    write_climate(pair / "clim.nc", site, years, ecosim / cfg["climate_template"], p["forcing"], plan["wind"],
+                  cfg["longwave"])
+    ghg = Path(cfg["ghg_file"]).name
+    shutil.copy(ecosim / cfg["ghg_file"], pair / ghg)
+    check_file(pair / "grid.nc", {"CDPTH": (0, p["depth"] + 1e-6), "FC": (0, 1), "WP": (0, 1), "THW": (0, 1)})
+    check_file(pair / "clim.nc", {"TMPH": (-60, 50), "SRADH": (0, 1400), "DWPTH": (0, 7), "RAINH": (0, 100), "WINDH": (0, 50)})
+    if veg:
+        write_sp_phenol(pair / "sp_phenol.nc", veg["code"], veg["lai"], veg["sai"], veg["height"], veg["population"], years[0])
+    text = test.xml.read_text()
+    edits = []
+    if cfg["start_temperature"] != "xml":
+        edits.append({"set": EDIT_IC, "value": p["T0"]})
+        if p["bottom_input"] is not None:
+            edits.append({"set": EDIT_BOTTOM, "value": p["bottom_T"]})
+    if not veg:      # the standalone sets the roughness of a mineral soil to 0.02 m (Hour1Mod.F90), the coupling takes it from the input
+        edits.append({"set": "PKs/EcoSIM for ATS/soil surface roughness height [m]", "value": STANDALONE_ROUGHNESS})
+    text = xmledit.edit_text(text, edits) if edits else text
+    (pair / "ats_match.xml").write_text(write_ats_variant(
+        test.name, text, dz, p["depth"], pair, mesh, p["ndays"], years, n, test.xml.parent, plan["ats_engine"]))
+    write_namelist(pair / "standalone.namelist", test.name, os.path.relpath(plan["pft_file"], pair / "standalone"),
+                   p["ndays"], years, ghg, cfg["history_fields"], plants=bool(veg))
+    meta = dict(name=test.name, bare=not veg, group=veg["group"] if veg else None, pft=veg["code"] if veg else None,
+                row=veg["row"] if veg else None, lai=veg["lai"] if veg else 0.0, sai=veg["sai"] if veg else 0.0,
+                height=veg["height"] if veg else None, population=veg["population"] if veg else None,
+                population_assumed=veg["assumed"] if veg else None, forcing=p["forcing"], ndays=p["ndays"],
+                years=list(years), start_temperature=p["T0"], bottom_temperature=p["bottom_T"],
+                input_start_temperature=p["T0_input"], input_bottom_temperature=p["bottom_input"],
+                layers=n, depth=p["depth"], top_dz=float(cfg["top_dz"]))
+    (pair / "pair.json").write_text(json.dumps(meta, indent=1) + "\n")
+
+
+def write_readme(path, plans, cfg):
+    first = plans[0]
+    p0, s0 = first["p"], first["s"]
     n = cfg["layers"]
-    rows = "\n".join(f"| {i+1} | {s['dz'][i]:.4f} | {s['depth_bottom'][i]:.4f} | {s['theta0'][i]:.5f} |"
-                     for i in range(n))
+    years = cfg["years"]
+    veg = [pl for pl in plans if pl["veg"]]
+    bare = [pl["test"].name for pl in plans if not pl["veg"]]
     tests = "\n".join(
-        f"| {t['name']} | {t['code']} | {t['row']} | {t['lai']:g} | {t['sai']:g} | {t['height']:g} | "
-        f"{t['population']:g}{' (assumed)' if t['assumed'] else ''} |" for t in plan)
+        f"| {pl['test'].name} | {v['code']} | {v['row']} | {v['lai']:g} | {v['sai']:g} | {v['height']:g} | "
+        f"{v['population']:g}{' (assumed)' if v['assumed'] else ''} |" for pl in veg for v in [pl["veg"]])
+    soils = "\n".join(
+        f"| {pl['test'].name} | {pl['p']['depth']:g} | {pl['p']['porosity']:g} | {pl['s']['fc']:.5f} | {pl['s']['wp']:.5f} | "
+        f"{pl['s']['ksat_mm_h']:.4f} | {pl['p']['T0']:g} | "
+        f"{'-' if pl['p']['bottom_T'] is None else format(pl['p']['bottom_T'], 'g')} | {pl['p']['ndays']:g} |" for pl in plans)
+    rows = "\n".join(f"| {i+1} | {s0['dz'][i]:.4f} | {s0['depth_bottom'][i]:.4f} | {s0['theta0'][i]:.5f} |" for i in range(n))
     bare_text = ""
     if bare:
         bare_text = (f"- **Bare ground ({', '.join(bare)}):** the same column without plants. The standalone runs with "
                      "`plant_model = .false.` and no phenology file, which is what the coupling sets when prescribed "
                      "phenology is off (`ATSEcoSIMInitMod.F90`); `RootH2OUptake_vr` is left out of its history. "
                      f"The ATS variant uses a soil surface roughness of {STANDALONE_ROUGHNESS:g} m, which the standalone "
-                     "hard-codes for a mineral soil; the original input has 0.01 m. The rest of the column, forcing "
-                     "and EcoSIM settings are those of the other pairs.\n")
-    bottom = (f"ATS fixes {p['bottom_T']:g} K at the bottom" if p["bottom_T"] is not None
-              else "ATS has no fixed bottom temperature in this input")
-    text = f"""# PFT test pairs: ATS-EcoSIM and standalone EcoSIM
+                     "hard-codes for a mineral soil; the input's own value is replaced.\n")
+    start = ("kept as the input has it (`--start-temperature xml`)" if cfg["start_temperature"] == "xml"
+             else f"{float(cfg['start_temperature']):g} K in both models, replacing the input's initial temperature "
+                  "(and its fixed bottom temperature: initial + 0.28 K)")
+    text = f"""# Matched pairs: ATS-EcoSIM and standalone EcoSIM
 
-Generated by `make_pft_standalone_pairs.py`; do not edit by hand. Nothing here has been run yet.
+Generated by `tools/ats_pairs.py pair`; do not edit by hand. Each pair is in `pairs/<test>/`.
 
 ## Running (per test `<name>`)
     ats --xml_file=../ats_match.xml                  # in pairs/<name>/ats/
@@ -439,36 +591,45 @@ Bare ground pairs: {', '.join(bare) or 'none'} (see Not matched).
 {tests}
 
 LAI and SAI are constant in time in both models (the standalone's monthly tables hold one value).
-Height is the PFT file's canopy height (`CANHT`), which the coupled path uses. Population: trees
-and grass use the ERT_SatePhenol values; the shrub value is an assumption, and what the coupled
-path uses is not established.
+Height is the PFT file's canopy height (`CANHT`), which the coupled path uses. Population is not in the ATS
+input: trees and grass use the ERT_SatePhenol values; any other value is an assumption (marked), and what
+the coupled path uses is not established. `--population TEST|PFT|GROUP=VALUE` overrides it.
+
+## Soil, column and start
+| test | depth [m] | porosity | FC | WP | Ksat [mm h-1] | start T [K] | ATS bottom T [K] | days |
+|---|---|---|---|---|---|---|---|---|
+{soils}
+
+Start temperature: {start}.
 
 ## Matched
 | item | value |
 |---|---|
 | plant code | prescribed phenology (`ldo_sp_mode`), same EcoSIM path as the coupling; PFT parameters from the same file |
-| column | {n} graded layers over {p['depth']:g} m, 1 m2, top layer {s['dz'][0]:.3f} m (the ATS variants use the same layers) |
-| porosity | {p['porosity']:g}: EcoSIM bulk density {s['bulk_density']:.4f} Mg m-3 with its particle density {cfg['particle_density']:g} (ATS rock density {p['rock_density']:g} kg m-3 is not matched) |
-| retention | FC = {s['fc']:.5f} at {p['psi_fc']:g} MPa, WP = {s['wp']:.5f} at {p['psi_wp']:g} MPa, from the ATS van Genuchten curve (alpha {p['vg_alpha']:g} Pa-1, n {p['vg_n']:g}, sr {p['sr']:g}) |
-| saturated conductivity | {s['ksat_mm_h']:.4f} mm h-1 = k rho g / mu, k = {p['permeability']:g} m2, mu at {p['T0']:g} K (ATS viscosity_water) |
+| column | {n} graded layers, 1 m2, top layer {s0['dz'][0]:.3f} m (the ATS variants use the same layers) |
+| porosity | EcoSIM bulk density from the ATS porosity with its particle density {cfg['particle_density']:g} Mg m-3 (the ATS rock density, {p0['rock_density']:g} kg m-3 in the first input, is not matched) |
+| retention | FC and WP from the ATS van Genuchten curve at the PK's field capacity and wilting point (table above) |
+| saturated conductivity | k rho g / mu with the ATS permeability and the water viscosity at the start temperature (ATS viscosity_water) |
 | boundaries | closed: standalone `grid_mode=3` (no lateral flow or runoff), `RCHGDG=0` (no-flow bottom), no water table; ATS has no flow BCs |
-| initial water | {s['theta0_source']} |
-| forcing | `{cfg['forcing_rel']}`; standalone hour J of day d = the record at the start of that hour; precipitation = rain + snow, partitioned by EcoSIM in both runs (ATS variants: "EcoSIM precipitation" = true) |
-| dates | both start on 1 January and run {p['ndays']:g} days with hourly steps |
-| site | latitude {site['latitude [deg]']:g} and solar noon {site['solar noon [h]']:g} h from the forcing file; soil albedo {cfg['soil_albedo']:g} as hard-coded in the coupled path; no organic matter or litter |
-| wind height | {wind_height:g} m: {wind_source}; `Z0G` of the standalone climate file |
+| initial water | analytic ATS hydrostatic state (head {p0['head']:g} m in the first input) |
+| forcing | the hourly file the input names; standalone hour J of day d = the record at the start of that hour; precipitation = rain + snow, partitioned by EcoSIM in both runs (ATS variants: "EcoSIM precipitation" = true) |
+| dates | both start on 1 January and run the days of the table with hourly steps |
+| site | latitude and solar noon from the forcing file; soil albedo {cfg['soil_albedo']:g} as hard-coded in the coupled path; no organic matter or litter |
+| wind height | {first['wind']:g} m ({first['wind_source']}; first input); `Z0G` of the standalone climate file |
 
 ## Not matched
-- **Calendar labels:** the forcing file has a 365-day calendar, ATS takes start year {int(site['start year'])} from it, and the standalone years are labelled {years[0]} and {years[1]} (non-leap) so that both runs see the same days. Only the label and the GHG record of the year differ.
+- **Calendar labels:** the forcing file has a 365-day calendar, ATS takes start year {int(first['site']['start year'])} from it, and the standalone years are labelled {years[0]} and {years[-1]} (non-leap) so that both runs see the same days. Only the label and the GHG record of the year differ.
 - **Soil water physics:** EcoSIM's own soil water solver and its retention curve, which agrees with van Genuchten only at FC and WP, against ATS Richards with van Genuchten. In the coupled run, ATS's soil state replaces EcoSIM's every hour.
-- **Micropore conductivity:** EcoSIM has no temperature correction; ATS uses its temperature-dependent viscosity. Ksat is matched at {p['T0']:g} K.
-- **Initial temperature and ice:** both start at {p['T0'] - 273.15:.2f} C, but they are not the same state. The standalone has no initial ice (`THI = -1`), so a start below the freezing point is liquid water far below it: in the first hour it freezes, releases latent heat and warms the whole column to about -0.5 C. ATS starts from a consistent frozen state and stays cold. Measured on the bare-ground pair with a start at -13 C: the standalone top layer was near -1 C under snow while ATS was near -12 C (about 10 K, for the first winter), and the first melt-out was 11 days apart. Starting both above the freezing point (ATS has no ice there either) removes this.
-- **Bottom heat boundary:** {bottom}. EcoSIM instead exchanges heat with a deep source temperature `TKSD = ATCAG + 0.28 K` placed 1 m below the column bottom (conductivity `TCNDG`, 2.25 W m-1 K-1), and `ATCAG` is the initial temperature written to the grid file above, not a climate value. With a start at -13 C the two boundaries were 25 K apart (EcoSIM about -13 C, ATS 12 C) and the bottom layers drifted 17 K apart in two years. To match them, set the ATS bottom temperature to the initial temperature plus 0.28 K.
-- **Thermal properties:** EcoSIM derives the soil conductivity from texture (a fixed loam here) as a weighted mean of the solid, water, ice and air terms; ATS uses the three-phase wet/dry Kersten model (`thermal conductivity` parameters of the input). On the same states the ATS values are about 1.5-1.7 times EcoSIM's for moist and frozen soil and less than half of it for dry soil (porosity 0.5, ATS 1.8 / 0.28 W m-1 K-1 saturated / dry: dry 0.28 vs 0.64, saturation 0.62 1.48 vs 0.93, saturated 1.8 vs 1.2, frozen with ice saturation 0.7 3.4 vs 2.0 W m-1 K-1). ATS parameters that follow EcoSIM's values (saturated 1.2, dry 0.64, unsaturated alpha unfrozen 1.38, frozen 1.0) changed the mean temperatures of the bare-ground pair by 0.3 K or less (first winter -1.2 to -1.5 C, year 2 skin bias 0.4 to 0.3 K) but added inadmissible-iterate warnings.
-- **Sky longwave:** ATS computes incoming longwave from air temperature and vapor pressure with a clear-sky emissivity (no cloud term, about 194 W m-2 in the first winter); the standalone estimates it with a cloud term from its shortwave (about 189 W m-2 clear sky, up to 215 overcast). `standalone.longwave = "ats"` in the manifest gives the standalone the ATS values.
+- **Micropore conductivity:** EcoSIM has no temperature correction; ATS uses its temperature-dependent viscosity. Ksat is matched at the start temperature.
+- **Initial temperature and ice:** the standalone has no initial ice (`THI = -1`), so a start below the freezing point is liquid water far below it: in the first hour it freezes, releases latent heat and warms the whole column to about -0.5 C. ATS starts from a consistent frozen state and stays cold. Measured on a bare-ground pair with a start at -13 C: the standalone top layer was near -1 C under snow while ATS was near -12 C (about 10 K, for the first winter), and the first melt-out was 11 days apart. A start above the freezing point (ATS has no ice there either) removes this, which is why the pairs start at {float(cfg['start_temperature']) - 273.15 if cfg['start_temperature'] != 'xml' else float('nan'):.2f} C by default.
+- **Bottom heat boundary:** EcoSIM exchanges heat with a deep source temperature `TKSD = ATCAG + 0.28 K` placed 1 m below the column bottom (conductivity `TCNDG`, 2.25 W m-1 K-1), and `ATCAG` is the initial temperature written to the grid file, not a climate value. With a start at -13 C and ATS's fixed bottom at 12 C the two boundaries were 25 K apart and the bottom layers drifted 17 K apart in two years. The pairs therefore set the ATS bottom temperature to the start temperature plus 0.28 K.
+- **Thermal properties:** EcoSIM derives the soil conductivity from texture (a fixed loam here) as a weighted mean of the solid, water, ice and air terms; ATS uses the three-phase wet/dry Kersten model (`thermal conductivity` parameters of the input). On the same states the ATS values are about 1.5-1.7 times EcoSIM's for moist and frozen soil and less than half of it for dry soil (porosity 0.5, ATS 1.8 / 0.28 W m-1 K-1 saturated / dry: dry 0.28 vs 0.64, saturation 0.62 1.48 vs 0.93, saturated 1.8 vs 1.2, frozen with ice saturation 0.7 3.4 vs 2.0 W m-1 K-1). ATS parameters that follow EcoSIM's values (saturated 1.2, dry 0.64, unsaturated alpha unfrozen 1.38, frozen 1.0) changed the mean temperatures of a bare-ground pair by 0.3 K or less but added inadmissible-iterate warnings.
+- **Sky longwave:** ATS computes incoming longwave from air temperature and vapor pressure with a clear-sky emissivity (no cloud term, about 194 W m-2 in the first winter); the standalone estimates it with a cloud term from its shortwave (about 189 W m-2 clear sky, up to 215 overcast). `--longwave ats` gives the standalone the ATS values.
 - **Hard-coded in the coupled path** (`ATSEcoSIMAdvanceMod.F90`): FC/WP water contents 0.5/0.25 and root-uptake conductivity 0.000571. The plant water and energy state is initialized once and then carried from hour to hour, as in the standalone.
 {bare_text}
 ## Layers
+Layers of the first test (the same for every test of the same depth):
+
 | layer | dz [m] | depth to bottom [m] | initial theta [m3 m-3] |
 |---|---|---|---|
 {rows}
@@ -476,125 +637,35 @@ path uses is not established.
     Path(path).write_text(text)
 
 
-def check_file(path, expect):
-    d = netCDF4.Dataset(path)
-    for name, (lo, hi) in expect.items():
-        v = np.ma.filled(d[name][...].astype(float), np.nan)
-        v = v[np.isfinite(v)]
-        if v.size and (v.min() < lo or v.max() > hi):
-            raise ValueError(f"{path}:{name} range {v.min():g}..{v.max():g} outside {lo:g}..{hi:g}")
-    d.close()
-
-
-# ---------------------------------------------------------------------------
-def generate_pairs(m, ecosim_src=render.DEFAULT_ECOSIM_SRC, ats_src=None, out=None, profile=None,
-                   only=None, population=None, dry_run=False):
-    """write the matched pairs of a suite (see the module description)"""
-    cfg = dict(m.standalone)
-    cfg["forcing"] = str(m.forcing)
-    cfg["forcing_rel"] = os.path.relpath(m.forcing, m.root)       # as written in the README
-    ecosim = Path(ecosim_src).resolve()
-    out = Path(out).resolve() if out else m.pairs_dir
-    ats_src = ats_src or render.WORKSPACE / "repos" / "dev" / "ats"
-    years = cfg["years"]
-    sweep = m.tests(only, baseline=False)
-    base = [t for t in m.tests(only) if t.is_baseline]           # the bare-ground baseline, if the suite has one
-    if not sweep and not base:
-        raise SystemExit("no tests selected")
-    pft_file = render.pft_file_path(m, ecosim)
-    if pft_file is None:
-        raise SystemExit("the manifest's standalone.pft_file is required for matched pairs")
-    names, heights = pft_table(pft_file)
-    with h5py.File(m.forcing, "r") as f:
-        site = {k: float(f[k][0]) for k in ("latitude [deg]", "solar noon [h]", "start year",
-                                             "start day of year [0-364]", "start hour [h]")}
-    assert site["start day of year [0-364]"] == 0 and site["start hour [h]"] == 0, \
-        "standalone runs start at 00:00 on 1 January"
-
-    # soil and column are the same for every test: take them from the first rendered input
-    probe = parse_xml(render.render_test(m, (sweep or base)[0], out / "probe" / "ats", ecosim, profile)).getroot()
-    p = render.ats_parameters(probe)
-    dz = layer_thicknesses(p["depth"], cfg["layers"], cfg["top_dz"])
-    s = soil(p, dz, cfg)
-    assert abs(dz.sum() - p["depth"]) < 1e-9 and len(dz) == cfg["layers"]
-    assert p["porosity"] > s["fc"] > s["wp"] > p["porosity"] * p["sr"], (s["fc"], s["wp"])
-    assert np.all((s["theta0"] > 0.0) & (s["theta0"] < 1.0)), "THW must be strictly in (0,1)"
-    assert p["ndays"] <= 365 * len(years), "forcing years cover the run"
-    if cfg["wind_height"] is not None:
-        wind, wind_source = float(cfg["wind_height"]), "from the manifest"
-    elif p["pk_wind_height"] is not None:
-        wind, wind_source = p["pk_wind_height"], "the EcoSIM PK's `wind speed reference height [m]` of the input"
-    else:
-        wind, wind_source = 3.0, "the EcoSIM PK's default `wind speed reference height [m]`, which the input does not set"
-
-    plan = []
-    for test in sweep:
-        q = test.params
-        code, row = q["pft"], int(q["vegetation_type"])
-        assert names[row - 1] == code, f"{test.name}: PFT row {row} is {names[row - 1]!r}, expected {code!r}"
-        pop = (population or {}).get(test.group, q["population"])
-        plan.append(dict(name=test.name, test=test, veg=test.group, code=code, row=row, lai=float(test.axis[1]),
-                         sai=p["sai"], height=float(heights[row - 1]), population=float(pop),
-                         assumed=bool(q.get("population_assumed")) and test.group not in (population or {})))
-
-    print(f"layers: {cfg['layers']} over {p['depth']:g} m, dz {dz[0]:.4f} .. {dz[-1]:.4f} m")
-    print(f"FC {s['fc']:.5f}  WP {s['wp']:.5f}  Ksat {s['ksat_mm_h']:.4f} mm/h  bulk density {s['bulk_density']:.4f}")
-    print(f"initial theta {s['theta0'].min():.4f} .. {s['theta0'].max():.4f} ({s['theta0_source']})")
-    print(f"run {p['ndays']:g} days; standalone years {tuple(years)}; PFT file {pft_file}; wind height {wind:g} m")
-    for t in plan:
-        print(f"  {t['name']:<24} {t['code']}  row {t['row']:>2}  LAI {t['lai']:<4g} SAI {t['sai']:g}  "
-              f"height {t['height']:g} m  population {t['population']:g}")
-    for t in base:
-        bare_p = render.ats_parameters(parse_xml(render.render_test(m, t, out / t.name / "ats", ecosim, profile)).getroot())
-        for k in ("depth", "ndays", "porosity", "permeability", "vg_alpha", "vg_n", "sr", "head", "T0", "bottom_T",
-                  "psi_fc", "psi_wp"):
-            assert bare_p[k] == p[k], f"{t.name}: {k} is {bare_p[k]} but the column of the pairs has {p[k]}"
-        print(f"  {t.name:<24} bare ground (no plants), same soil column")
+def generate_pairs(case, options=None, ecosim_src=None, ats_src=None, only=None, populations=None, dry_run=False):
+    """write the matched pair of every input of the case (or of the tests in `only`)"""
+    cfg = {**OPTIONS, **(options or {})}
+    ecosim = Path(ecosim_src or render.default_ecosim_src()).resolve()
+    ats_src = Path(ats_src or render.default_ats_src())
+    tests = case.tests(only)
+    if not tests:
+        raise CaseError("no tests selected")
+    print(f"case {case.name}: {len(tests)} inputs; EcoSIM source {ecosim}")
+    plans = []
+    for test in tests:                                  # validate all inputs before writing anything
+        plan = plan_test(test, cfg, ecosim, populations or {})
+        plans.append(plan)
+        p, v = plan["p"], plan["veg"]
+        what = (f"{v['code']} row {v['row']} LAI {v['lai']:g} SAI {v['sai']:g} height {v['height']:g} m "
+                f"population {v['population']:g}{' (assumed)' if v['assumed'] else ''}") if v else "bare ground (no plants)"
+        print(f"  {test.name:<28} {what}; {p['ndays']:g} d, {p['depth']:g} m, start {p['T0']:g} K"
+              + (f", bottom {p['bottom_T']:g} K" if p["bottom_T"] is not None else ""))
+        if cfg["start_temperature"] == "xml" and p["T0"] < 273.15:
+            print(f"    warning: the start is below freezing; the standalone has no initial ice (see pairs/README.md)")
     if dry_run:
         print("dry run: nothing written")
-        return plan
-
-    common = out / "common"
-    common.mkdir(parents=True, exist_ok=True)
-    mesh = common / f"column_graded{cfg['layers']}.exo"
-    write_mesh(dz, p["depth"], cfg["layers"], mesh, ats_src)
-    write_grid(common / "grid_match.nc", s, p, site, ecosim / cfg["grid_template"], cfg)
-    write_climate(common / "clim_match.nc", site, years, ecosim / cfg["climate_template"], m.forcing, wind,
-                  cfg["longwave"])
-    ghg = Path(cfg["ghg_file"]).name
-    shutil.copy(ecosim / cfg["ghg_file"], common / ghg)
-    check_file(common / "grid_match.nc",
-               {"CDPTH": (0, p["depth"] + 1e-6), "FC": (0, 1), "WP": (0, 1), "THW": (0, 1)})
-    check_file(common / "clim_match.nc",
-               {"TMPH": (-60, 50), "SRADH": (0, 1400), "DWPTH": (0, 7), "RAINH": (0, 100), "WINDH": (0, 50)})
-
-    for t in plan:
-        pair = out / t["name"]
-        (pair / "ats").mkdir(parents=True, exist_ok=True)
-        (pair / "standalone").mkdir(parents=True, exist_ok=True)
-        text = render.render_test(m, t["test"], pair / "ats", ecosim, profile)     # its own ATS input
-        (pair / "ats_match.xml").write_text(
-            write_ats_variant(t["name"], text, dz, p["depth"], pair, mesh, p["ndays"], years, cfg["layers"]))
-        write_sp_phenol(pair / "sp_phenol.nc", t["code"], t["lai"], t["sai"], t["height"], t["population"], years[0])
-        write_namelist(pair / "standalone.namelist", t["name"], os.path.relpath(pft_file, pair / "standalone"),
-                       p["ndays"], years, ghg, cfg["history_fields"])
-        print("wrote", pair)
-    for t in base:
-        pair = out / t.name
-        (pair / "ats").mkdir(parents=True, exist_ok=True)
-        (pair / "standalone").mkdir(parents=True, exist_ok=True)
-        text = write_ats_variant(t.name, render.render_test(m, t, pair / "ats", ecosim, profile), dz, p["depth"], pair,
-                                 mesh, p["ndays"], years, cfg["layers"])
-        # the standalone sets the roughness of a mineral soil to 0.02 m (Hour1Mod.F90), the coupling takes it from the input
-        text = xmledit.edit_text(text, [{"set": "PKs/EcoSIM for ATS/soil surface roughness height [m]",
-                                         "value": STANDALONE_ROUGHNESS}])
-        (pair / "ats_match.xml").write_text(text)
-        write_namelist(pair / "standalone.namelist", t.name, os.path.relpath(pft_file, pair / "standalone"),
-                       p["ndays"], years, ghg, cfg["history_fields"], plants=False)
-        print("wrote", pair, "(bare ground)")
+        return plans
+    for plan in plans:
+        write_pair(case, plan, cfg, ecosim, ats_src)
+        print("wrote", case.pair_dir(plan["test"].name))
     if only:
         print("README.md not rewritten for a subset of the tests")
     else:
-        write_readme(out / "README.md", p, s, site, years, plan, cfg, wind, wind_source, [t.name for t in base])
-        print("wrote", out / "README.md")
-    return plan
+        write_readme(case.pairs_dir / "README.md", plans, cfg)
+        print("wrote", case.pairs_dir / "README.md")
+    return plans

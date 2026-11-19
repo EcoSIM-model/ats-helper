@@ -1,1 +1,1 @@
-"""ATS-EcoSIM paired test tooling: inputs from a suite manifest, matched standalone cases, runner, report."""
+"""ATS-EcoSIM paired test tooling: matched standalone cases and ATS inputs from a case folder's ATS-EcoSIM inputs, runner, report."""
