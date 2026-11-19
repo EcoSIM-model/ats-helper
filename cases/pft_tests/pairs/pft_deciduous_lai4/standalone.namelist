@@ -6,13 +6,13 @@
 case_name          = 'pft_deciduous_lai4'
 do_regression_test = .false.
 pft_file_in        = '../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc'
-grid_file_in       = '../../common/grid_match.nc'
+grid_file_in       = '../grid.nc'
 pft_mgmt_in        = 'NO'
 sp_phenol_in       = '../sp_phenol.nc'      ! PFT, population and geometry
-clm_hour_file_in   = '../../common/clim_match.nc'
+clm_hour_file_in   = '../clim.nc'
 clm_factor_in      = 'NO'
 soil_mgmt_in       = 'NO'
-atm_ghg_in         = '../../common/fatm_hist_GHGs_1750-2023.nc'
+atm_ghg_in         = '../fatm_hist_GHGs_1750-2023.nc'
 
 lverbose        = .false.
 ldo_sp_mode     = .true.

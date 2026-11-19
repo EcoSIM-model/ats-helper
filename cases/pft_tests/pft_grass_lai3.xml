@@ -127,7 +127,7 @@ model.
       <Parameter name="engine" type="string" value="EcoSIM"/>
       <Parameter name="shared surface layer" type="bool" value="false"/>
       <Parameter name="semi-implicit surface heat exchange" type="bool" value="true"/>
-      <Parameter name="engine input file" type="string" value="../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc"/>
+      <Parameter name="engine input file" type="string" value="../../repos/ecosim/input_data/ecosim_pftpar_20261021.nc"/>
       <Parameter name="primary variable key" type="string" value="hydraulic_conductivity"/>
       <Parameter name="heat capacity [MJ mol^-1 K^-1]" type="double" value="2.0"/>
       <Parameter name="initial time step" type="double" value="3600" />
@@ -140,23 +140,23 @@ model.
       <Parameter name="number of pfts" type="int" value="1"/>
       <!-- site and calendar from the hourly forcing file (time 0 = 1980-01-01 00:00 local solar time) -->
       <ParameterList name="starting year" type="ParameterList">
-        <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+        <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
         <Parameter name="header" type="string" value="start year"/>
       </ParameterList>
       <ParameterList name="starting day of year [0-364]" type="ParameterList">
-        <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+        <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
         <Parameter name="header" type="string" value="start day of year [0-364]"/>
       </ParameterList>
       <ParameterList name="starting hour [h]" type="ParameterList">
-        <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+        <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
         <Parameter name="header" type="string" value="start hour [h]"/>
       </ParameterList>
       <ParameterList name="latitude [degrees]" type="ParameterList">
-        <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+        <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
         <Parameter name="header" type="string" value="latitude [deg]"/>
       </ParameterList>
       <ParameterList name="solar noon [h]" type="ParameterList">
-        <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+        <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
         <Parameter name="header" type="string" value="solar noon [h]"/>
       </ParameterList>
       <ParameterList name="boundary conditions" type="ParameterList">
@@ -393,7 +393,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-constant" type="ParameterList">
-                <Parameter name="value" type="double" value="2.0"/>
+                <Parameter name="value" type="double" value="3.0"/>
               </ParameterList>
             </ParameterList>
           </ParameterList>
@@ -421,7 +421,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-constant" type="ParameterList">
-                <Parameter name="value" type="double" value="19.0"/>
+                <Parameter name="value" type="double" value="77.0"/>
               </ParameterList>
             </ParameterList>
           </ParameterList>
@@ -525,7 +525,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="precipitation snow [m SWE s^-1]"/>
               </ParameterList>
@@ -575,7 +575,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="incoming shortwave radiation [W m^-2]"/>
               </ParameterList>
@@ -602,7 +602,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="air temperature [K]"/>
               </ParameterList>
@@ -632,7 +632,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="wind speed [m s^-1]"/>
               </ParameterList>
@@ -648,7 +648,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="vapor pressure air [Pa]"/>
               </ParameterList>
@@ -864,7 +864,7 @@ model.
             <Parameter name="component" type="string" value="cell"/>
             <ParameterList name="function" type="ParameterList">
               <ParameterList name="function-tabular" type="ParameterList">
-                <Parameter name="file" type="string" value="../data/daymet_TaylorRiverCO_hourly.h5"/>
+                <Parameter name="file" type="string" value="data/daymet_TaylorRiverCO_hourly.h5"/>
                 <Parameter name="x header" type="string" value="time [s]"/>
                 <Parameter name="y header" type="string" value="precipitation rain [m s^-1]"/>
               </ParameterList>
