@@ -197,78 +197,42 @@ def prepare_sources(base, case):
 
 
 # ---------------------------------------------------------------------------------------------
-# Paired-model cases (kind "pairs"): a suite of ATS-EcoSIM / standalone EcoSIM pairs under
-# cases/<suite>/, run with tools/ats_pairs.py's runner instead of one ATS input.
+# Paired-model cases (kind "pairs"): a case folder of ATS-EcoSIM inputs (cases/<case_dir>/*.xml and its
+# data), from which tools/ats_pairs.py writes the matched pairs, runs both models and compares the result.
 
-PAIR_INPUT_NAMES = ("ats_match.xml", "standalone.namelist", "sp_phenol.nc")
-PFT_FILE_RE = re.compile(r"[^\s\"'<>=]*/input_data/(ecosim_pftpar_[0-9]+\.nc)")
-
-
-def pair_input_files(pairs_dir):
-    """the generated input files of a suite's pairs directory (never run outputs, logs or reports)"""
-    files = []
-    for path in sorted(pairs_dir.rglob("*")):
-        rel = path.relative_to(pairs_dir)
-        if not path.is_file():
-            continue
-        if rel.parts[0] == "common" or rel == Path("README.md") or (len(rel.parts) == 2 and rel.name in PAIR_INPUT_NAMES):
-            files.append(rel)
+def case_input_files(case_dir):
+    """the inputs of a case folder: its *.xml files and everything under data/ (never pairs/ or run outputs)"""
+    files = [p.relative_to(case_dir) for p in sorted(case_dir.glob("*.xml"))]
+    files += [p.relative_to(case_dir) for p in sorted((case_dir / "data").rglob("*")) if p.is_file()]
     return files
 
 
-def pair_inputs_sha256(pairs_dir):
-    """one checksum over the names and contents of all pair input files"""
-    digest = hashlib.sha256()
-    for rel in pair_input_files(pairs_dir):
-        digest.update(f"{rel.as_posix()}\0{sha256(pairs_dir / rel)}\n".encode())
-    return digest.hexdigest()
-
-
 def load_pairs_case(case):
-    for key in ("suite", "profile", "files", "pair_inputs_sha256", "pft_file", "expected", "comparison", "known_limitations"):
+    for key in ("case_dir", "files", "pft_file", "expected", "comparison", "known_limitations"):
         if key not in case:
             raise ValueError(f"Pairs case lacks {key!r}")
-    suite = case_file(ROOT, case["suite"])
-    if not suite.is_file():
-        raise ValueError(f"Missing suite: {case['suite']}")
+    case_dir = case_file(ROOT, case["case_dir"])
+    if not case_dir.is_dir():
+        raise ValueError(f"Missing case folder: {case['case_dir']}")
+    actual = {(case_dir / rel).relative_to(ROOT).as_posix() for rel in case_input_files(case_dir)}
+    if actual != set(case["files"]):
+        raise ValueError("The case folder's inputs differ from the locked list: "
+                         f"{sorted(actual ^ set(case['files']))}")
     for name, expected in case["files"].items():
         if sha256(case_file(ROOT, name)) != expected:
             raise ValueError(f"Checksum mismatch: {name}")
-    if case["suite"] not in case["files"]:
-        raise ValueError("The suite file needs a checksum")
-    if pair_inputs_sha256(suite.parent / "pairs") != case["pair_inputs_sha256"]:
-        raise ValueError("The generated pair inputs differ from the locked ones; regenerate and re-lock the case")
+    if {p.stem for p in case_dir.glob("*.xml")} != set(case["expected"]):
+        raise ValueError("The locked cycle counts do not cover exactly the case folder's inputs")
 
 
-def localize_pair_inputs(pairs_dir, ecosim_src):
-    """Point every PFT parameter file reference at the locked EcoSIM checkout.
-
-    The committed inputs name the file through the developer's checkout (repos/dev/ecosim); a
-    reproduction builds EcoSIM at the locked commit in its own volume. Only that path changes."""
-    found = 0
-    for path in [*pairs_dir.glob("*/ats_match.xml"), *pairs_dir.glob("*/standalone.namelist")]:
-        text = path.read_text()
-        new, n = PFT_FILE_RE.subn(lambda m: f"{ecosim_src}/input_data/{m.group(1)}", text)
-        if n:
-            path.write_text(new)
-        found += n
-    if not found:
-        raise RuntimeError(f"No PFT parameter file reference found in the pair inputs under {pairs_dir}")
-
-
-def copy_suite(case, run):
-    """copy the suite's inputs (not its outputs) under the run directory, keeping relative paths valid"""
-    suite = case_file(ROOT, case["suite"])
-    target = run / suite.parent.relative_to(ROOT)
-    for sub in ("data", "templates"):
-        if (suite.parent / sub).is_dir():
-            shutil.copytree(suite.parent / sub, target / sub)
-    shutil.copy2(suite, target / suite.name)
-    pairs = suite.parent / "pairs"
-    for rel in pair_input_files(pairs):
-        (target / "pairs" / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(pairs / rel, target / "pairs" / rel)
-    return target / suite.name
+def copy_case(case, run):
+    """copy the case folder's inputs (not its outputs) under the run directory, keeping relative paths valid"""
+    case_dir = case_file(ROOT, case["case_dir"])
+    target = run / case_dir.relative_to(ROOT)
+    for rel in case_input_files(case_dir):
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(case_dir / rel, target / rel)
+    return target
 
 
 def verify_pairs(case, results, pairs_dir, only=None):
@@ -297,27 +261,26 @@ def verify_pairs(case, results, pairs_dir, only=None):
     return {"passed": not issues, "issues": issues, "tests": tests}
 
 
-def run_pairs(case, run, ecosim_src, only=None):
-    """run every pair of the suite (standalone EcoSIM, then ATS) on a copy of the locked inputs;
+def run_pairs(case, run, ecosim_src, ats_src, only=None):
+    """write the pairs of the case folder, then run every pair (standalone EcoSIM, then ATS);
     `only` restricts it to some tests, which is for trying the workflow, not for reproducing"""
-    from ats_ecosim_pairs import jobs as jobs_mod, manifest, runner
+    from ats_ecosim_pairs import case as case_mod, jobs as jobs_mod, pairs, runner
 
     expected_pft = case["pft_file"]
     pft = Path(ecosim_src) / "input_data" / Path(expected_pft["path"]).name
     if sha256(pft) != expected_pft["sha256"]:
         raise RuntimeError(f"{pft} differs from the locked PFT parameter file")
-    suite = copy_suite(case, run)
-    localize_pair_inputs(suite.parent / "pairs", ecosim_src)
-    m = manifest.load(suite)
+    copy = case_mod.load(copy_case(case, run))
+    pairs.generate_pairs(copy, case.get("options", {}), ecosim_src, ats_src, only)
     # Open MPI refuses to start as root otherwise.
     os.environ.setdefault("OMPI_ALLOW_RUN_AS_ROOT", "1")
     os.environ.setdefault("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1")
     parallel = int(os.environ.get("PAIRS_JOBS", min(4, os.cpu_count() or 1)))
     results = {}
-    for backend in ("standalone", "ats-matched"):
-        batch = jobs_mod.build_jobs(m, backend, only=only)
+    for backend in ("standalone", "ats"):
+        batch = jobs_mod.build_jobs(copy, backend, only=only)
         results[backend] = runner.run_jobs(batch, parallel=parallel, max_wall_s=120 * 60)
-    return results, suite.parent / "pairs"
+    return results, copy.pairs_dir
 
 
 def cycle_records(stdout):
@@ -420,13 +383,13 @@ def write_report(run, report, case):
     if tests:
         rows = "".join(
             f"<tr><td>{esc(name)}</td><td>{esc(row.get('standalone', {}).get('status', '-'))}</td>"
-            f"<td>{esc(row.get('ats-matched', {}).get('status', '-'))}</td>"
+            f"<td>{esc(row.get('ats', {}).get('status', '-'))}</td>"
             f"<td>{esc(str(row.get('ats_cycles', {}).get('got')))} / {esc(str(row.get('ats_cycles', {}).get('expected')))}</td></tr>"
             for name, row in sorted(tests.items()))
         body += ("<h2>Pairs</h2><table border='1' cellpadding='4' style='border-collapse:collapse'>"
                  "<tr><th>test</th><th>standalone</th><th>ATS</th><th>ATS cycles (got / locked)</th></tr>" + rows + "</table>"
                  "<p>The inputs and outputs of the run are under <code>cases/</code> in this directory; "
-                 "<code>python3 tools/ats_pairs.py report &lt;this directory&gt;/cases/&lt;suite&gt;/suite.json</code> "
+                 "<code>python3 tools/ats_pairs.py report &lt;this directory&gt;/cases/&lt;case&gt;</code> "
                  "builds the comparison report on the host.</p>")
     if (run / "results.png").exists():
         body += "<a href='results.pdf'><img src='results.png' style='width:100%;max-width:1300px'></a>"
@@ -484,7 +447,8 @@ def reproduce(name, prepare_only=False):
             report["status"] = "running"
             if case.get("kind") == "pairs":
                 only = os.environ.get("PAIRS_ONLY", "").split() or None
-                results, pairs_dir = run_pairs(case, run, base / "sources/ecosim", only)
+                results, pairs_dir = run_pairs(case, run, base / "sources/ecosim",
+                                               base / "sources/amanzi" / ATS_PATH, only)
                 report["status"] = "checking"
                 verification = verify_pairs(case, results, pairs_dir, only)
                 report["verification"] = verification

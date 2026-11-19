@@ -110,7 +110,7 @@ Outputs under `/ats-helper` appear on the host (owned by root on Linux).
 
 ```bash
 ./reproduce.sh 200day-adaptive      # one 200-day column, compared with a reference checkpoint
-./reproduce.sh pairs                # the 14 ATS-EcoSIM / standalone EcoSIM pairs of cases/pft_tests
+./reproduce.sh pairs                # the 14 ATS-EcoSIM / standalone EcoSIM pairs of the cases/pft_tests inputs
 ```
 
 Each case pins the Amanzi, ATS and EcoSIM commits and the checksums of its inputs, downloads the sources,
@@ -136,36 +136,34 @@ revision that contains the case; the pins do not follow later branch updates.
 | [`reproduce.sh`](reproduce.sh) `CASE` | shorthand for `run_docker.sh --reproduce CASE`; lists the available cases |
 | [`docker/build-ats-ecosim.sh`](docker/build-ats-ecosim.sh) | the in-container build that `--build-ats-ecosim` and the reproduction run |
 | [`docker/reproduce_case.py`](docker/reproduce_case.py) | fetches the pinned sources, builds, runs and verifies a case (`200day-adaptive`, `pairs`) |
-| [`docker/lock_pairs_case.py`](docker/lock_pairs_case.py) | writes `cases/pairs/case.json` from a finished suite run; refuses unless every run passed |
+| [`docker/lock_pairs_case.py`](docker/lock_pairs_case.py) | writes `cases/pairs/case.json` from a finished run of a case folder; refuses unless every run passed |
 | [`tools/ats_pairs.py`](tools/ats_pairs.py) | the paired-model tool below |
 
-`tools/ats_pairs.py` builds, runs and compares paired ATS-EcoSIM and standalone EcoSIM tests from one
-manifest, for example [`cases/pft_tests/suite.json`](cases/pft_tests/suite.json) (bare ground plus PFT columns
-over LAI, 729 days of hourly forcing).
+`tools/ats_pairs.py` turns a case folder into matched pairs and compares them. A case folder, for example
+[`cases/pft_tests`](cases/pft_tests) (bare ground plus PFT columns over LAI), holds ATS-EcoSIM inputs
+(`<test>.xml`, any number) and the data they refer to, and no scripts. For each input it writes a standalone
+EcoSIM case and a revised ATS input on the same graded column, derived from the input itself.
 
 | Command | What it does | Where |
 | --- | --- | --- |
-| `inputs SUITE` | one ATS input per test, from the template and the manifest's edits | host |
-| `pairs SUITE` | the standalone EcoSIM cases (grid, climate, phenology, namelist), the graded column and the matched ATS inputs, plus a README of what is and is not matched | host |
-| `run SUITE ats\|ats-matched\|standalone` | runs the tests with a watchdog and writes `status.txt` per test and a summary file | in the container (`--container NAME`) |
-| `summarize SUITE BACKEND` | re-evaluates finished runs from their logs, runs nothing | either |
-| `report SUITE` | comparison report `pairs/report/index.html` (and `bare_ground.html`) with figures | host |
+| `pair CASE` | writes `CASE/pairs/<test>/`: the standalone EcoSIM case and the revised ATS input of each `<test>.xml`, plus a README of what is and is not matched | host |
+| `run CASE [standalone\|ats\|both]` | runs the pairs with a watchdog and writes `status.txt` per run and a summary file | in the container (`--container NAME`) |
+| `summarize CASE` | re-evaluates finished runs from their logs, runs nothing | either |
+| `report CASE` | comparison report `CASE/pairs/report/index.html` with figures | host |
+| `all CASE` | `pair`, `run both` and `report` in turn | host + container |
 
 A run passes only if it reached its end time, exited normally and has no EcoSIM `ENDRUN` (EcoSIM exits with
 code 0 when it aborts); it is stopped on a collapsing timestep, at the wall-clock or at the log-size limit.
 
-Typical use, with the built container running (`--container` takes its name):
-
 ```bash
-pip install -r tools/requirements.txt          # host packages for pairs and report
-python3 tools/ats_pairs.py pairs  cases/pft_tests/suite.json --profile matched-start
-python3 tools/ats_pairs.py run    cases/pft_tests/suite.json standalone  --jobs 4 --container NAME
-python3 tools/ats_pairs.py run    cases/pft_tests/suite.json ats-matched --jobs 4 --container NAME
-python3 tools/ats_pairs.py report cases/pft_tests/suite.json
+pip install -r tools/requirements.txt          # host packages for pair and report
+python3 tools/ats_pairs.py pair cases/pft_tests --dry-run          # what would be matched, or why an input is refused
+python3 tools/ats_pairs.py all  cases/pft_tests --container NAME --jobs 4
 ```
 
-`--profile matched-start` starts both models at 1.00 C with matching bottom temperatures; `--only T ...`
-selects tests. Manifest keys, edit syntax and how to add a suite are in [`tools/README.md`](tools/README.md).
+To compare your own input, put `my_input.xml` and its forcing data in `cases/my_case/` and run the same
+commands on that folder. The pairs start both models at 274.15 K by default (`--start-temperature`); see
+[`tools/README.md`](tools/README.md) for what is read from the input, what is changed and what is refused.
 Tests (no model is run): `python3 -m unittest discover -s tests`.
 
 ## License

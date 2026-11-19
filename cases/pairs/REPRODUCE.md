@@ -1,19 +1,19 @@
 # Reproducing the paired ATS-EcoSIM / standalone EcoSIM runs
 
-`cases/pft_tests` holds 14 pairs: a bare-ground column and 13 prescribed-phenology PFT columns
-(deciduous, evergreen, grass and shrub at several LAI), each run with ATS-EcoSIM and with standalone
-EcoSIM on the same graded 19-layer column and 729 days of hourly Daymet forcing. The pairs use the
-`matched-start` profile: both models start at 1.00 C and the ATS bottom temperature is 274.429 K
-(initial temperature + 0.28 K, EcoSIM's deep source temperature).
+`cases/pft_tests` holds 14 ATS-EcoSIM inputs: a bare-ground column and 13 prescribed-phenology PFT columns
+(deciduous, evergreen, grass and shrub at several LAI), 729 days of hourly Daymet forcing. For each input
+`tools/ats_pairs.py` writes a matched standalone EcoSIM case and a revised ATS input on the same graded
+19-layer column, starting both models at 274.15 K, runs both and compares them.
 
-This case builds the model sources recorded in `case.json`, runs every pair and checks the result.
+This case builds the model sources recorded in `case.json`, does all of that and checks the result.
 
-    ./reproduce.sh pairs                    # build (hours the first time), run, verify
+    ./reproduce.sh pairs                    # build (hours the first time), pair, run, verify
     ./reproduce.sh pairs --prepare-only     # download and verify the sources and inputs only
 
 `JOBS=4 ./reproduce.sh pairs` sets the compile jobs (default 2); `PAIRS_JOBS=N` sets how many pairs run
-at once (default: up to 4). The build and the runs happen in their own Docker volume, named after the
-case file's hash, so they never touch the development build.
+at once (default: up to 4); `PAIRS_ONLY="name ..."` restricts a run to some inputs, to try the workflow (the
+result is then reported as "not a reproduction"). The build and the runs happen in their own Docker volume,
+named after the case file's hash, so they never touch the development build.
 
 ## What is pinned
 
@@ -30,11 +30,11 @@ after Amanzi's submodules are initialised (Amanzi then sees its ATS pointer as m
 Amanzi's `TPLVersions.cmake` still names the EcoSIM ref `agraus/PrescribedPhenology`; the build script
 resolves that name to the locked EcoSIM commit through a local mirror, so the name itself does not matter.
 
-The suite's inputs are locked too: the checksums of `suite.json`, the forcing, the ATS templates and
-one checksum over all generated pair inputs (`pair_inputs_sha256`). A changed input stops the case before
-anything is built. The committed inputs name the PFT parameter file through the developer's checkout
-(`repos/dev/ecosim`); the run replaces that path, in its own copy of the inputs, by the locked EcoSIM
-checkout and checks the file's checksum.
+The inputs are locked too: `case.json` lists the checksum of every `*.xml` and every data file of
+`cases/pft_tests`, and of the PFT parameter file in the EcoSIM checkout. A changed, added or removed input
+stops the case before anything is built. The pairs themselves are not stored: the run writes them from the
+inputs inside the container (the image has the Python packages `pair` needs, and the built TPLs provide the
+`exodus` wrapper of the ATS meshing tools).
 
 ## What is checked
 
@@ -44,24 +44,25 @@ accepted ATS steps of every pair must equal the one in `case.json` (`cycle_toler
 repeat exactly between runs on the reference platform, so a change in any pair shows up.
 
 This does not compare fields. To judge a run scientifically, build the comparison report from its copy of
-the suite (the result page names the directory):
+the case (the result page names the directory):
 
-    python3 tools/ats_pairs.py report build-logs/reproduce/pairs/<run>/cases/pft_tests/suite.json
+    python3 tools/ats_pairs.py report build-logs/reproduce/pairs/<run>/cases/pft_tests
 
 ## Results
 
 `build-logs/reproduce/pairs/<run>/` holds `index.html` (status and per-pair table), `report.json`,
-`verification.json`, the build logs and `cases/pft_tests/`, a copy of the suite with all run outputs
-(several GB for the full suite).
+`verification.json`, the build logs and `cases/pft_tests/`, a copy of the case folder with the pairs and all
+run outputs (several GB).
 
 ## Refreshing the lock
 
-After changing the sources or the inputs: regenerate the pairs if needed
-(`python3 tools/ats_pairs.py pairs cases/pft_tests/suite.json --profile matched-start`), run both backends
-of the whole suite on a build of the new sources, then write the case again with `docker/lock_pairs_case.py`
-(its docstring gives the commands). It refuses to lock unless every run passed.
+After changing the sources or the inputs: run the whole case folder on a build of the new sources
+(`python3 tools/ats_pairs.py all cases/pft_tests --container NAME`), then write the case again with
+`docker/lock_pairs_case.py` (its docstring gives the command). It refuses to lock unless every run passed.
 
 ## Limits
 
 An Ubuntu 24.04 ARM64, single-rank baseline; apt packages and transitive downloads are not locked.
-Other platforms may change the cycle counts without the physics being wrong.
+Other platforms may change the cycle counts without the physics being wrong. The full build of the pinned
+sources from an empty volume and a full run of this case have not been done; the source download and the
+in-container pair generation have been tested.

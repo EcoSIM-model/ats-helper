@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Write cases/pairs/case.json, the lock of a paired-model suite, from a finished run of that suite.
+"""Write cases/pairs/case.json, the lock of a paired-model case folder, from a finished run of its pairs.
 
-The case pins the three source commits, the checksums of the suite's inputs and the ATS accepted-cycle
-count of every pair (from the status.txt that tools/ats_pairs.py run wrote). Run this on the host after
-the whole suite passed on the build the sources describe:
+The case pins the three source commits, the checksums of the folder's inputs and data, and the ATS
+accepted-cycle count of every pair (from the status.txt that `ats_pairs.py run` wrote). Run this on the host
+after the whole folder passed on a build of the sources it names:
 
-    python3 tools/ats_pairs.py run cases/pft_tests/suite.json standalone  --container NAME
-    python3 tools/ats_pairs.py run cases/pft_tests/suite.json ats-matched --container NAME
+    python3 tools/ats_pairs.py all cases/pft_tests --container NAME
     python3 docker/lock_pairs_case.py \\
         --amanzi https://github.com/jinyun1tang/amanzi.git@<commit> \\
         --ats https://github.com/AndrewGraus/ats.git@<commit> \\
@@ -27,18 +26,19 @@ spec = importlib.util.spec_from_file_location("reproduce_case", ROOT / "docker/r
 rc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rc)
 
-DESCRIPTION = ("Paired ATS-EcoSIM and standalone EcoSIM runs of the {suite} suite (bare ground and "
-               "prescribed-phenology PFT columns, 729 days of hourly Daymet forcing), with the matched start "
-               "of both models (profile {profile}).")
+DESCRIPTION = ("Paired ATS-EcoSIM and standalone EcoSIM runs of the inputs in {case_dir} (bare ground and "
+               "prescribed-phenology PFT columns, 729 days of hourly Daymet forcing), each pair written by "
+               "tools/ats_pairs.py from its input with the matched start of both models.")
 LIMITATIONS = [
-    "Pins model sources, their recursive submodules, the suite's inputs and each pair's ATS accepted-cycle "
-    "count. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image identity "
-    "and installed packages are recorded per run.",
+    "Pins model sources, their recursive submodules, the case folder's inputs and data, and each pair's ATS "
+    "accepted-cycle count. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image "
+    "identity and installed packages are recorded per run.",
     "The cycle counts were produced on Ubuntu ARM64 with one MPI rank. Other architectures or toolchains "
     "can change them without the physics being wrong; the comparison report (tools/ats_pairs.py report) "
     "is the way to judge such a run.",
     "ATS is a commit that Amanzi's recorded ATS pointer does not name; the runner fetches it from its own URL.",
 ]
+PAIR_OPTIONS = ("start_temperature", "layers", "top_dz")       # recorded in pair.json by `pair`
 
 
 def source(spec_text):
@@ -57,8 +57,7 @@ def status_of(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--suite", default="cases/pft_tests/suite.json")
-    parser.add_argument("--profile", default="matched-start")
+    parser.add_argument("--case-dir", default="cases/pft_tests")
     parser.add_argument("--amanzi", required=True)
     parser.add_argument("--ats", required=True)
     parser.add_argument("--ecosim", required=True)
@@ -66,34 +65,45 @@ def main():
     parser.add_argument("--out", default="cases/pairs/case.json")
     args = parser.parse_args()
 
-    suite = (ROOT / args.suite).resolve()
-    pairs = suite.parent / "pairs"
-    tests = sorted(p.name for p in pairs.iterdir() if (p / "ats_match.xml").is_file())
-    if not tests:
-        raise SystemExit(f"No generated pairs under {pairs}")
-    expected = {}
-    for name in tests:
+    case_dir = (ROOT / args.case_dir).resolve()
+    pairs = case_dir / "pairs"
+    names = [p.stem for p in sorted(case_dir.glob("*.xml"))]
+    if not names:
+        raise SystemExit(f"No inputs in {case_dir}")
+    expected, options = {}, {}
+    for name in names:
+        meta_file = pairs / name / "pair.json"
+        if not meta_file.is_file():
+            raise SystemExit(f"{meta_file} not found: run `ats_pairs.py pair` and run the pairs first")
+        meta = json.loads(meta_file.read_text())
+        used = {k: round(meta[k], 6) for k in PAIR_OPTIONS}
+        if options and used != options:
+            raise SystemExit(f"{name}: pair options {used} differ from the other pairs' {options}")
+        options = used
         status_of(pairs / name / "standalone/status.txt")
         match = re.search(r"last cycle (\d+)", status_of(pairs / name / "ats/status.txt"))
         if not match:
             raise SystemExit(f"{name}: no cycle count in ats/status.txt")
         expected[name] = {"ats_cycles": int(match.group(1))}
 
-    files = [suite, *sorted(p for sub in ("data", "templates") for p in (suite.parent / sub).glob("*") if p.is_file())]
-    pft_name = json.loads(suite.read_text())["standalone"]["pft_file"]
+    pft_name = "input_data/ecosim_pftpar_20261021.nc"
+    namelist = (pairs / names[0] / "standalone.namelist").read_text()
+    found = re.search(r"pft_file_in\s*=\s*'[^']*/(input_data/[^'/]+)'", namelist)
+    if found:
+        pft_name = found.group(1)
     pft = Path(args.ecosim_src) / pft_name
     case = {
         "schema_version": 1,
         "name": "pairs",
         "kind": "pairs",
-        "description": DESCRIPTION.format(suite=suite.parent.name, profile=args.profile),
+        "description": DESCRIPTION.format(case_dir=args.case_dir),
         "sources": {"amanzi": source(args.amanzi),
                     "ats": {**source(args.ats), "override_amanzi_gitlink": True},
                     "ecosim": source(args.ecosim)},
-        "suite": suite.relative_to(ROOT).as_posix(),
-        "profile": args.profile,
-        "files": {p.relative_to(ROOT).as_posix(): rc.sha256(p) for p in files},
-        "pair_inputs_sha256": rc.pair_inputs_sha256(pairs),
+        "case_dir": case_dir.relative_to(ROOT).as_posix(),
+        "options": options,
+        "files": {(case_dir / rel).relative_to(ROOT).as_posix(): rc.sha256(case_dir / rel)
+                  for rel in rc.case_input_files(case_dir)},
         "pft_file": {"path": pft_name, "sha256": rc.sha256(pft)},
         "expected": expected,
         "comparison": {"cycle_tolerance": 0},
@@ -104,7 +114,7 @@ def main():
     out = ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(case, indent=2) + "\n")
-    print(f"wrote {out} ({len(tests)} pairs)")
+    print(f"wrote {out} ({len(names)} pairs)")
 
 
 if __name__ == "__main__":

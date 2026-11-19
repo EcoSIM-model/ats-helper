@@ -162,73 +162,53 @@ class CaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Local changes"):
                 runner.prepare_sources(work, {"sources": sources})
 
-    def test_bundled_pairs_case_integrity_and_changed_input_rejection(self):
-        # Work on a copy of the bundle: the suite files the case locks live outside cases/pairs.
+    def make_case_folder(self, root, name="cases/mine"):
+        folder = root / name
+        (folder / "data").mkdir(parents=True)
+        (folder / "pairs/t1/ats").mkdir(parents=True)
+        for rel, text in (("t1.xml", "<a/>"), ("t2.xml", "<b/>"), ("data/forcing.h5", "F"), ("data/sub/x.dat", "X"),
+                          ("pairs/t1/ats/out.log", "OUTPUT"), ("notes.txt", "not an input")):
+            (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+            (folder / rel).write_text(text)
+        return folder
+
+    def test_case_inputs_are_the_xml_files_and_the_data_folder_only(self):
+        folder = self.make_case_folder(self.base)
+        self.assertEqual([r.as_posix() for r in runner.case_input_files(folder)],
+                         ["t1.xml", "t2.xml", "data/forcing.h5", "data/sub/x.dat"])
+
+    def test_pairs_case_rejects_added_removed_and_changed_inputs(self):
         root = self.base / "workspace"
-        shutil.copytree(ROOT / "cases/pairs", root / "cases/pairs")
-        suite = root / "cases/pft_tests"
-        for sub in ("data", "templates"):
-            shutil.copytree(ROOT / "cases/pft_tests" / sub, suite / sub)
-        shutil.copy2(ROOT / "cases/pft_tests/suite.json", suite / "suite.json")
-        for rel in runner.pair_input_files(ROOT / "cases/pft_tests/pairs"):
-            (suite / "pairs" / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / "cases/pft_tests/pairs" / rel, suite / "pairs" / rel)
+        root.mkdir()
+        root = root.resolve()                                                       # macOS temp dirs are symlinks
+        folder = self.make_case_folder(root)
+        files = {(folder / r).relative_to(root).as_posix(): runner.sha256(folder / r) for r in runner.case_input_files(folder)}
+        case = {"case_dir": "cases/mine", "files": files, "pft_file": {}, "comparison": {},
+                "expected": {"t1": {"ats_cycles": 1}, "t2": {"ats_cycles": 2}}, "known_limitations": []}
         with patch.object(runner, "ROOT", root):
-            case = runner.load_case(root / "cases/pairs")
-            self.assertEqual(case["kind"], "pairs")
-            self.assertEqual(len(case["expected"]), 14)
-            self.assertTrue(case["sources"]["ats"]["override_amanzi_gitlink"])
-            namelist = suite / "pairs/bare_ground/standalone.namelist"
-            namelist.write_text(namelist.read_text() + "! edited\n")
-            with self.assertRaisesRegex(ValueError, "pair inputs differ"):
-                runner.load_case(root / "cases/pairs")
-            shutil.copy2(ROOT / "cases/pft_tests/pairs/bare_ground/standalone.namelist", namelist)
-            with (suite / "templates/ecosim_freeze_thaw_hourly.xml").open("a") as stream:
-                stream.write("<!-- edited -->\n")
+            runner.load_pairs_case(case)                                            # as locked
+            (folder / "pairs/t1/ats/out.log").write_text("MORE OUTPUT")             # outputs are not inputs
+            runner.load_pairs_case(case)
+            (folder / "t3.xml").write_text("<c/>")
+            with self.assertRaisesRegex(ValueError, "differ from the locked list"):
+                runner.load_pairs_case(case)
+            (folder / "t3.xml").unlink()
+            (folder / "data/forcing.h5").write_text("changed")
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
-                runner.load_case(root / "cases/pairs")
+                runner.load_pairs_case(case)
+            (folder / "data/forcing.h5").write_text("F")
+            case["expected"].pop("t2")
+            with self.assertRaisesRegex(ValueError, "do not cover exactly"):
+                runner.load_pairs_case(case)
 
-    def make_pairs_dir(self):
-        pairs = self.base / "pairs"
-        for rel, text in (("README.md", "r"), ("common/grid.nc", "g"), ("t1/ats_match.xml", "x"),
-                          ("t1/standalone.namelist", "n"), ("t1/sp_phenol.nc", "p"),
-                          ("t1/ats/out.log", "OUTPUT"), ("t1/standalone/out.log", "OUTPUT"),
-                          ("report/index.html", "OUTPUT"), ("ats_match_run.log", "OUTPUT"),
-                          ("standalone_summary.txt", "OUTPUT")):
-            (pairs / rel).parent.mkdir(parents=True, exist_ok=True)
-            (pairs / rel).write_text(text)
-        return pairs
-
-    def test_pair_input_checksum_covers_inputs_only(self):
-        pairs = self.make_pairs_dir()
-        self.assertEqual([r.as_posix() for r in runner.pair_input_files(pairs)],
-                         ["README.md", "common/grid.nc", "t1/ats_match.xml", "t1/sp_phenol.nc", "t1/standalone.namelist"])
-        before = runner.pair_inputs_sha256(pairs)
-        (pairs / "t1/ats/out.log").write_text("DIFFERENT OUTPUT")
-        (pairs / "report/index.html").unlink()
-        self.assertEqual(runner.pair_inputs_sha256(pairs), before)
-        (pairs / "t1/standalone.namelist").write_text("changed")
-        self.assertNotEqual(runner.pair_inputs_sha256(pairs), before)
-
-    def test_pft_file_references_are_pointed_at_the_locked_ecosim(self):
-        pairs = self.base / "pairs"
-        (pairs / "t1").mkdir(parents=True)
-        (pairs / "t1/standalone.namelist").write_text(
-            "pft_file_in = '../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc'\ngrid_file_in = '../../common/grid.nc'\n")
-        (pairs / "t1/ats_match.xml").write_text(
-            '<Parameter name="engine input file" type="string" value="../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc" />\n'
-            '<Parameter name="file" type="string" value="../../../data/forcing.h5" />\n')
-        runner.localize_pair_inputs(pairs, "/ats-build/sources/ecosim")
-        self.assertIn("pft_file_in = '/ats-build/sources/ecosim/input_data/ecosim_pftpar_20261021.nc'",
-                      (pairs / "t1/standalone.namelist").read_text())
-        xml = (pairs / "t1/ats_match.xml").read_text()
-        self.assertIn('value="/ats-build/sources/ecosim/input_data/ecosim_pftpar_20261021.nc"', xml)
-        self.assertIn("../../../data/forcing.h5", xml)            # other paths are untouched
-        empty = self.base / "empty-pairs"
-        (empty / "t1").mkdir(parents=True)
-        (empty / "t1/standalone.namelist").write_text("grid_file_in = 'x'\n")
-        with self.assertRaisesRegex(RuntimeError, "No PFT parameter file reference"):
-            runner.localize_pair_inputs(empty, "/ats-build/sources/ecosim")
+    @unittest.skipUnless((ROOT / "cases/pairs/case.json").is_file(), "needs the pairs case")
+    def test_bundled_pairs_case_matches_the_case_folder(self):
+        case = runner.load_case(ROOT / "cases/pairs")
+        self.assertEqual(case["kind"], "pairs")
+        self.assertTrue(case["sources"]["ats"]["override_amanzi_gitlink"])
+        self.assertEqual(case["case_dir"], "cases/pft_tests")
+        self.assertEqual(len(case["expected"]), 14)
+        self.assertFalse(list((ROOT / case["case_dir"]).glob("*.py")), "no scripts belong in a case folder")
 
     def test_pairs_verification_flags_failed_runs_and_changed_cycle_counts(self):
         pairs = self.base / "pairs"
@@ -238,7 +218,7 @@ class CaseTests(unittest.TestCase):
                 f"ATS | Cycle = {cycle},  Time [days] = 728.9,  dt [days] = 0.04\n")
         case = {"expected": {"t1": {"ats_cycles": 100}, "t2": {"ats_cycles": 100}}, "comparison": {"cycle_tolerance": 0}}
         results = {"standalone": [("t1", "PASSED", ""), ("t2", "FAILED (rc=1)", "bad")],
-                   "ats-matched": [("t1", "PASSED", ""), ("t2", "PASSED", "")]}
+                   "ats": [("t1", "PASSED", ""), ("t2", "PASSED", "")]}
         verification = runner.verify_pairs(case, results, pairs)
         self.assertFalse(verification["passed"])
         self.assertEqual(len(verification["issues"]), 2)
