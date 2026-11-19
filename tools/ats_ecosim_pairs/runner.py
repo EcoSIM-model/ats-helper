@@ -7,7 +7,8 @@ One runner for both models. A job says what to execute, where, and how to tell t
 Both are also stopped at a wall-clock or log-size limit. A run passes only if it finished, exited
 normally and shows no EcoSIM ENDRUN: EcoSIM stops with exit code 0 when it aborts, so the exit code
 alone is not enough. A failed run is noted with the last error text of its log (for example a missing
-file or parameter) and the next job is started.
+file or parameter) and the next job is started. A job that cannot even be launched is reported as a
+failed job too, so the other jobs still run and appear in the summary.
 """
 
 import os
@@ -98,14 +99,28 @@ def classify(job, log, returncode=0):
     return "PASSED", where
 
 
+def open_log(run_dir, attempts=5, pause_s=1.0):
+    """Create the run directory and open its log for writing.
+
+    A directory made a moment earlier can be briefly invisible through a Docker bind mount, so the
+    open is retried a few times, recreating the directory each time, before the error is passed on."""
+    for attempt in range(attempts):
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return open(run_dir / "out.log", "wb")
+        except FileNotFoundError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(pause_s)
+
+
 def run_one(job, min_dt_days=1e-5, max_wall_s=45 * 60, max_log_gb=15):
     """Run one job with the watchdog; returns (name, status, detail)."""
-    job.run_dir.mkdir(parents=True, exist_ok=True)
     log = job.run_dir / "out.log"
     print(f"--- {job.name}: start ({' '.join(map(str, job.cmd))}; run dir {job.run_dir})", flush=True)
     t0 = time.time()
     stopped = None
-    with open(log, "wb") as out:
+    with open_log(job.run_dir) as out:
         proc = subprocess.Popen(job.cmd, cwd=job.run_dir, stdout=out, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         while proc.poll() is None:
@@ -137,13 +152,29 @@ def run_one(job, min_dt_days=1e-5, max_wall_s=45 * 60, max_log_gb=15):
     return job.name, status, detail
 
 
+def run_one_safely(job, **limits):
+    """run_one, but a runner error (a log that cannot be opened, a missing executable) is recorded
+    as this job's failure instead of ending the whole command and hiding the other jobs' results"""
+    try:
+        return run_one(job, **limits)
+    except Exception as exc:                      # noqa: BLE001 - any launch problem is this job's result
+        status, detail = "FAILED (runner error)", f"{type(exc).__name__}: {exc}"
+        try:
+            job.run_dir.mkdir(parents=True, exist_ok=True)
+            (job.run_dir / "status.txt").write_text(f"{status} | {detail}\n")
+        except OSError:
+            pass
+        print(f"--- {job.name}: {status}; {detail}", flush=True)
+        return job.name, status, detail
+
+
 def run_jobs(jobs, parallel=1, dry_run=False, **limits):
     if dry_run:
         for job in jobs:
             print(f"--- {job.name} (skipped)")
         return [(job.name, "skipped", "") for job in jobs]
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        return list(pool.map(lambda job: run_one(job, **limits), jobs))
+        return list(pool.map(lambda job: run_one_safely(job, **limits), jobs))
 
 
 def summarize_jobs(jobs):

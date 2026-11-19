@@ -6,6 +6,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -229,6 +230,38 @@ class RunnerTests(unittest.TestCase):
             """)
             job = runner.Job("done", "ats", [done], Path(tmp) / "c", end_days=10.0)
             self.assertEqual(runner.run_one(job)[1], "PASSED")
+
+    def test_a_job_that_cannot_launch_is_a_failure_and_the_others_still_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done = self.fake(tmp, """
+                print("ATS | Cycle = 9,  Time [days] = 9.99,  dt [days] = 0.04", flush=True)
+            """)
+            bad = runner.Job("bad", "ats", [str(Path(tmp) / "no_such_exe")], Path(tmp) / "a", end_days=10.0)
+            good = runner.Job("good", "ats", [done], Path(tmp) / "b", end_days=10.0)
+            results = runner.run_jobs([bad, good], parallel=2)
+            self.assertEqual([r[0] for r in results], ["bad", "good"])
+            self.assertEqual(results[0][1], "FAILED (runner error)")
+            self.assertIn("no_such_exe", results[0][2])
+            self.assertIn("runner error", (Path(tmp) / "a" / "status.txt").read_text())
+            self.assertEqual(results[1][1], "PASSED")
+
+    def test_log_open_retries_when_the_run_directory_is_briefly_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, real_open, calls = Path(tmp) / "r", open, []
+
+            def flaky_open(path, mode="r", *a, **kw):
+                calls.append(path)
+                if len(calls) < 3:
+                    raise FileNotFoundError(path)
+                return real_open(path, mode, *a, **kw)
+            with mock.patch("builtins.open", flaky_open):
+                with runner.open_log(run_dir, pause_s=0) as f:
+                    f.write(b"x")
+            self.assertEqual(len(calls), 3)
+            self.assertEqual((run_dir / "out.log").read_bytes(), b"x")
+            with mock.patch("builtins.open", side_effect=FileNotFoundError("gone")):
+                with self.assertRaises(FileNotFoundError):
+                    runner.open_log(run_dir, attempts=2, pause_s=0)
 
     def test_summary_file_is_written_only_for_real_results(self):
         with tempfile.TemporaryDirectory() as tmp:
