@@ -26,7 +26,7 @@ from pathlib import Path
 TOP_KEYS = {"name", "description", "ats", "name_pattern", "sweep", "xml_edits", "profiles", "standalone", "compare"}
 ATS_KEYS = {"template", "baseline", "forcing", "data_dir", "data_prefix"}
 STANDALONE_KEYS = {"pft_file", "years", "layers", "top_dz", "particle_density", "soil_albedo", "wind_height",
-                   "history_fields", "grid_template", "climate_template", "ghg_file"}
+                   "history_fields", "grid_template", "climate_template", "ghg_file", "longwave"}
 COMPARE_KEYS = {"thresholds"}
 STANDALONE_DEFAULTS = {
     "years": [1981, 1982], "layers": 19, "top_dz": 0.05, "particle_density": 2.66, "soil_albedo": 0.2,
@@ -35,6 +35,7 @@ STANDALONE_DEFAULTS = {
     "grid_template": "examples/inputs/blodgett/Blodget_grid_20251115.nc",
     "climate_template": "examples/inputs/blodgett/Blodget.clim.2012-2022.nc",
     "ghg_file": "input_data/fatm_hist_GHGs_1750-2023.nc",
+    "longwave": None,           # "ats": give the standalone the sky longwave ATS computes (clear sky, from T and vapor pressure)
 }
 
 

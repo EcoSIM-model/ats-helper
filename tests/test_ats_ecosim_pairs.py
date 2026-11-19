@@ -297,6 +297,14 @@ class JobTests(unittest.TestCase):
 @unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4")),
                      "pairs need numpy, h5py and netCDF4")
 class BareNamelistTests(unittest.TestCase):
+    def test_ats_sky_longwave_matches_the_ats_formula(self):
+        import numpy as np
+        from ats_ecosim_pairs import pairs
+        t, e = 273.15, 600.0
+        expected = 1.08 * (1.0 - np.exp(-(e / 100.0) ** (t / 2016.0))) * 5.670374419e-8 * t ** 4
+        self.assertAlmostEqual(float(pairs.ats_sky_longwave(t, e)), float(expected), places=9)
+        self.assertTrue(150.0 < float(pairs.ats_sky_longwave(t, e)) < 330.0)         # a plausible W m-2
+
     def test_plant_free_namelist(self):
         from ats_ecosim_pairs import pairs
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,6 +333,9 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report.grade(0.95, "min", 0.9, 0.7), "green")
         self.assertEqual(report.grade(float("nan"), "min", 0.9, 0.7), "na")
         self.assertEqual(report.grade(3.0, "max", 2.0, 5.0), "amber")
+        # the top soil cell: the thinnest of a graded column (numbered from the top), the last of a uniform one
+        self.assertEqual(report.top_cell(np.array([0.05, 0.061, 0.075, 1.8])), 0)
+        self.assertEqual(report.top_cell(np.full(100, 0.1)), 99)
         # an ATS series that is the standalone one delayed by one hour is found with shift -1 ... or 0 for itself
         rng = np.random.default_rng(1)
         sa = rng.normal(size=report.HOURS)

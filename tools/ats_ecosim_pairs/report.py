@@ -90,6 +90,16 @@ def aligned(arr, shift):
     return arr[s:s + HOURS]
 
 
+def top_cell(volumes):
+    """index of the top soil cell from the cell volumes of the column (the vis file has no coordinates).
+
+    A graded column (the matched variants) is numbered from the top and its top cell is the thinnest one.
+    A uniform column (the generated mesh of the suite inputs) is numbered from the bottom up: the last cell.
+    """
+    v = np.round(np.asarray(volumes, dtype=float), 9)
+    return int(np.argmin(v)) if v.min() < v.max() else len(v) - 1
+
+
 def load_ats(test, kind):
     run = PAIRS / test / "ats" if kind == "matched" else SUITE_DIR / test
     d = read_dat(run / "surf_prop.dat")
@@ -113,9 +123,9 @@ def load_ats(test, kind):
             keys = sorted(g.keys(), key=int)
             days = np.array([g[k].attrs["Time"] * 365.25 for k in keys])      # ATS stores years of 365.25 days
             cells = np.array([np.asarray(g[k][...]).ravel() for k in keys])
+            vol = np.asarray(f["cell_volume"][sorted(f["cell_volume"].keys(), key=int)[0]][...]).ravel()
         if len(keys) > 100 and np.allclose(np.diff(days)[:50], 1.0, atol=1e-3):
-            top = int(np.argmax(cells.std(axis=0)))      # the cell with the largest variability is the top one
-            out["top_days"], out["top_T"] = days, cells[:, top] - 273.15
+            out["top_days"], out["top_T"] = days, cells[:, top_cell(vol)] - 273.15
     return out
 
 

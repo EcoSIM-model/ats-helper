@@ -226,7 +226,13 @@ def write_grid(path, s, p, site, template, cfg):
     d.close()
 
 
-def forcing_years(forcing, nyears):
+def ats_sky_longwave(temp_k, vapor_pressure_pa):
+    """incoming longwave [W m-2] of the ATS evaluator (seb_physics_funcs.cc, IncomingLongwaveRadiation)"""
+    e_air = (vapor_pressure_pa / 100.0) ** (temp_k / 2016.0)
+    return 1.08 * (1.0 - np.exp(-e_air)) * 5.670374419e-8 * temp_k ** 4
+
+
+def forcing_years(forcing, nyears, longwave=None):
     """Hourly forcing as EcoSIM's (year, day, hour, grid) arrays.
 
     The coupled EcoSIM call at the start of an hour gets the ATS forcing there (the value
@@ -248,7 +254,12 @@ def forcing_years(forcing, nyears):
             out[y, :365, :, 0] = days
             out[y, 365, :, 0] = days[-1]
         return out
-    return {
+    out = {}
+    if longwave == "ats":              # W m-2, like SRADH (ClimReadMod converts); XRADH replaces the sky-emissivity estimate
+        out["XRADH"] = yearly(ats_sky_longwave(data["air temperature [K]"], data["vapor pressure air [Pa]"]))
+    elif longwave:
+        raise ValueError(f"standalone.longwave must be null or 'ats', not {longwave!r}")
+    return {**out,
         "TMPH": yearly(data["air temperature [K]"] - 273.15),
         "WINDH": yearly(data["wind speed [m s^-1]"]),
         "RAINH": yearly((data["precipitation rain [m s^-1]"] + data["precipitation snow [m SWE s^-1]"])
@@ -258,11 +269,14 @@ def forcing_years(forcing, nyears):
     }
 
 
-def write_climate(path, site, years, template, forcing, wind_height):
+def write_climate(path, site, years, template, forcing, wind_height, longwave=None):
     n = len(years)
     t, d = copy_structure(template, path)
     t.close()
-    for k, v in forcing_years(forcing, n).items():
+    for k, v in forcing_years(forcing, n, longwave).items():
+        if k not in d.variables:       # XRADH: hourly longwave, not in the template
+            x = d.createVariable(k, "f8", ("year", "day", "hour", "ngrid"))
+            x.long_name, x.units = "Incoming longwave radiation (hourly)", "W m-2"
         d[k][0:n, ...] = v
     d["year"][0:n] = list(years)
     d["Z0G"][0:n, :] = wind_height
@@ -448,8 +462,10 @@ path uses is not established.
 - **Calendar labels:** the forcing file has a 365-day calendar, ATS takes start year {int(site['start year'])} from it, and the standalone years are labelled {years[0]} and {years[1]} (non-leap) so that both runs see the same days. Only the label and the GHG record of the year differ.
 - **Soil water physics:** EcoSIM's own soil water solver and its retention curve, which agrees with van Genuchten only at FC and WP, against ATS Richards with van Genuchten. In the coupled run, ATS's soil state replaces EcoSIM's every hour.
 - **Micropore conductivity:** EcoSIM has no temperature correction; ATS uses its temperature-dependent viscosity. Ksat is matched at {p['T0']:g} K.
-- **Bottom heat boundary:** {bottom}; EcoSIM applies a geothermal heat flux. Both start at {p['T0'] - 273.15:.2f} C (EcoSIM: mean annual temperature `ATCAG`, no initial ice).
-- **Thermal properties:** EcoSIM derives them from texture (a fixed loam here); ATS uses the three-phase wet/dry model.
+- **Initial temperature and ice:** both start at {p['T0'] - 273.15:.2f} C, but they are not the same state. The standalone has no initial ice (`THI = -1`), so a start below the freezing point is liquid water far below it: in the first hour it freezes, releases latent heat and warms the whole column to about -0.5 C. ATS starts from a consistent frozen state and stays cold. Measured on the bare-ground pair with a start at -13 C: the standalone top layer was near -1 C under snow while ATS was near -12 C (about 10 K, for the first winter), and the first melt-out was 11 days apart. Starting both above the freezing point (ATS has no ice there either) removes this.
+- **Bottom heat boundary:** {bottom}. EcoSIM instead exchanges heat with a deep source temperature `TKSD = ATCAG + 0.28 K` placed 1 m below the column bottom (conductivity `TCNDG`, 2.25 W m-1 K-1), and `ATCAG` is the initial temperature written to the grid file above, not a climate value. With a start at -13 C the two boundaries were 25 K apart (EcoSIM about -13 C, ATS 12 C) and the bottom layers drifted 17 K apart in two years. To match them, set the ATS bottom temperature to the initial temperature plus 0.28 K.
+- **Thermal properties:** EcoSIM derives the soil conductivity from texture (a fixed loam here) as a weighted mean of the solid, water, ice and air terms; ATS uses the three-phase wet/dry Kersten model (`thermal conductivity` parameters of the input). On the same states the ATS values are about 1.5-1.7 times EcoSIM's for moist and frozen soil and less than half of it for dry soil (porosity 0.5, ATS 1.8 / 0.28 W m-1 K-1 saturated / dry: dry 0.28 vs 0.64, saturation 0.62 1.48 vs 0.93, saturated 1.8 vs 1.2, frozen with ice saturation 0.7 3.4 vs 2.0 W m-1 K-1). ATS parameters that follow EcoSIM's values (saturated 1.2, dry 0.64, unsaturated alpha unfrozen 1.38, frozen 1.0) changed the mean temperatures of the bare-ground pair by 0.3 K or less (first winter -1.2 to -1.5 C, year 2 skin bias 0.4 to 0.3 K) but added inadmissible-iterate warnings.
+- **Sky longwave:** ATS computes incoming longwave from air temperature and vapor pressure with a clear-sky emissivity (no cloud term, about 194 W m-2 in the first winter); the standalone estimates it with a cloud term from its shortwave (about 189 W m-2 clear sky, up to 215 overcast). `standalone.longwave = "ats"` in the manifest gives the standalone the ATS values.
 - **Hard-coded in the coupled path** (`ATSEcoSIMAdvanceMod.F90`): FC/WP water contents 0.5/0.25 and root-uptake conductivity 0.000571. The plant water and energy state is initialized once and then carried from hour to hour, as in the standalone.
 {bare_text}
 ## Layers
@@ -543,7 +559,8 @@ def generate_pairs(m, ecosim_src=render.DEFAULT_ECOSIM_SRC, ats_src=None, out=No
     mesh = common / f"column_graded{cfg['layers']}.exo"
     write_mesh(dz, p["depth"], cfg["layers"], mesh, ats_src)
     write_grid(common / "grid_match.nc", s, p, site, ecosim / cfg["grid_template"], cfg)
-    write_climate(common / "clim_match.nc", site, years, ecosim / cfg["climate_template"], m.forcing, wind)
+    write_climate(common / "clim_match.nc", site, years, ecosim / cfg["climate_template"], m.forcing, wind,
+                  cfg["longwave"])
     ghg = Path(cfg["ghg_file"]).name
     shutil.copy(ecosim / cfg["ghg_file"], common / ghg)
     check_file(common / "grid_match.nc",
