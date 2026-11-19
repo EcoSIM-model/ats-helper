@@ -103,6 +103,9 @@ class CaseTests(unittest.TestCase):
                                            (ecosim, nested, "nested")):
             self.git(parent, "-c", "protocol.file.allow=always", "submodule", "add", str(child), destination)
             self.commit(parent)
+        # Amanzi and ATS need a reachable tag for version derivation.
+        for tagged in (ats, amanzi):
+            self.git(tagged, "tag", "v1")
         sources = {name: {"url": str(path), "commit": self.git(path, "rev-parse", "HEAD")}
                    for name, path in (("amanzi", amanzi), ("ats", ats), ("ecosim", ecosim))}
         # Advance the origin after locking; the runner must still select the pin.
@@ -121,6 +124,38 @@ class CaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Local changes"):
                 runner.prepare_sources(work, {"sources": sources})
             self.assertEqual(edited.read_text(), "local changes\n")
+
+    def shallow_fork_clone(self):
+        """A depth-1 clone of a fork that, like a GitHub fork, carries no tags."""
+        fork = self.repo("fork")
+        (fork / "tracked.txt").write_text("second\n")
+        self.commit(fork)
+        clone = self.base / "shallow"
+        subprocess.run(["git", "clone", "--depth", "1", f"file://{fork}", str(clone)],
+                       check=True, capture_output=True)
+        self.assertEqual(self.git(clone, "rev-parse", "--is-shallow-repository"), "true")
+        self.assertFalse(runner.describable(clone))
+        return fork, clone
+
+    def test_version_history_fetched_from_upstream_tags(self):
+        fork, clone = self.shallow_fork_clone()
+        upstream = self.base / "upstream"
+        subprocess.run(["git", "clone", str(fork), str(upstream)], check=True, capture_output=True)
+        self.git(upstream, "tag", "amanzi-1.7")
+        head = self.git(clone, "rev-parse", "HEAD")
+        with patch.dict(runner.VERSION_TAG_SOURCES, {"amanzi": str(upstream)}):
+            runner.ensure_version_history(clone, "amanzi")
+        self.assertTrue(runner.describable(clone))
+        self.assertEqual(self.git(clone, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.git(clone, "rev-parse", "--is-shallow-repository"), "false")
+        self.assertEqual(self.git(clone, "status", "--porcelain", "--untracked-files=normal"), "")
+        runner.ensure_version_history(clone, "amanzi")  # already describable: no-op
+
+    def test_version_history_without_any_tag_is_reported(self):
+        _, clone = self.shallow_fork_clone()
+        with patch.dict(runner.VERSION_TAG_SOURCES, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "No reachable tag for amanzi"):
+                runner.ensure_version_history(clone, "amanzi")
 
 
 if __name__ == "__main__":

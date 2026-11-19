@@ -69,6 +69,41 @@ def verify_checkout(path, source):
         raise RuntimeError(f"Local changes in {path}; refusing to overwrite them")
 
 
+# Amanzi's and ATS's CMake derive their version strings from `git describe --tags`,
+# and fail to configure when no tag is reachable. Shallow clones have no history, and
+# GitHub forks do not copy upstream tags, so tags are taken from these repositories
+# when the pinned origin cannot describe the commit.
+VERSION_TAG_SOURCES = {
+    "amanzi": "https://github.com/amanzi/amanzi.git",
+    "ats": "https://github.com/amanzi/ats.git",
+}
+
+
+def describable(path):
+    return subprocess.run(["git", "-C", str(path), "describe", "--tags"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def ensure_version_history(path, name):
+    """Fetch full history and tags so `git describe --tags` works; HEAD is unchanged."""
+    shallow = git(path, "rev-parse", "--is-shallow-repository") == "true"
+    if not shallow and describable(path):
+        return
+    head = git(path, "rev-parse", "HEAD")
+    fetch = ["git", "-C", path, "fetch", "--no-recurse-submodules"]
+    if shallow:
+        command(fetch + ["--unshallow", "--tags", "origin"])
+    else:
+        command(fetch + ["--tags", "origin"])
+    upstream = VERSION_TAG_SOURCES.get(name)
+    if not describable(path) and upstream:
+        command(fetch + [upstream, "refs/tags/*:refs/tags/*"])
+    if git(path, "rev-parse", "HEAD") != head:
+        raise RuntimeError(f"Fetching version history moved HEAD in {path}")
+    if not describable(path):
+        raise RuntimeError(f"No reachable tag for {name} in {path}; its version cannot be derived")
+
+
 def prepare_sources(base, case):
     sources = base / "sources"
     sources.mkdir(exist_ok=True)
@@ -102,6 +137,9 @@ def prepare_sources(base, case):
             raise RuntimeError(f"Incomplete or mismatched recursive submodules in {path}")
     ats = sources / "amanzi/src/physics/ats"
     verify_checkout(ats, case["sources"]["ats"])
+    for name, path in (("amanzi", sources / "amanzi"), ("ats", ats)):
+        ensure_version_history(path, name)
+        verify_checkout(path, case["sources"][name])
     return {name: {"commit": git(path, "rev-parse", "HEAD"),
                    "origin": git(path, "remote", "get-url", "origin"),
                    "recursive_submodules": git(path, "submodule", "status", "--recursive")}
