@@ -125,6 +125,132 @@ class CaseTests(unittest.TestCase):
                 runner.prepare_sources(work, {"sources": sources})
             self.assertEqual(edited.read_text(), "local changes\n")
 
+    def test_ats_commit_that_amanzi_does_not_record_is_checked_out_and_kept(self):
+        ats = self.repo("ats-origin")
+        amanzi = self.repo("amanzi-origin")
+        ecosim = self.repo("ecosim-origin")
+        self.git(amanzi, "-c", "protocol.file.allow=always", "submodule", "add", str(ats), "src/physics/ats")
+        self.commit(amanzi)
+        for tagged in (ats, amanzi):
+            self.git(tagged, "tag", "v1")
+        # A fork ahead of the ATS that Amanzi records, as AndrewGraus/ats is of Amanzi's ATS.
+        fork = self.base / "ats-fork"
+        subprocess.run(["git", "clone", str(ats), str(fork)], check=True, capture_output=True)
+        (fork / "tracked.txt").write_text("fork commit\n")
+        self.commit(fork)
+        sources = {name: {"url": str(path), "commit": self.git(path, "rev-parse", "HEAD")}
+                   for name, path in (("amanzi", amanzi), ("ats", fork), ("ecosim", ecosim))}
+        sources["ats"]["override_amanzi_gitlink"] = True
+        recorded = self.git(ats, "rev-parse", "HEAD")
+        self.assertNotEqual(sources["ats"]["commit"], recorded)
+        work = self.base / "case-volume"
+        work.mkdir()
+        ats_dir = work / "sources/amanzi/src/physics/ats"
+        with patch.dict(os.environ, GIT_ALLOW_PROTOCOL="file"):
+            result = runner.prepare_sources(work, {"sources": sources})
+            self.assertEqual(result["ats"]["commit"], sources["ats"]["commit"])
+            self.assertEqual((ats_dir / "tracked.txt").read_text(), "fork commit\n")
+            # A second run keeps the locked ATS although Amanzi records another commit.
+            runner.prepare_sources(work, {"sources": sources})
+            self.assertEqual(self.git(ats_dir, "rev-parse", "HEAD"), sources["ats"]["commit"])
+            # Without the override flag the same pin is refused.
+            del sources["ats"]["override_amanzi_gitlink"]
+            with self.assertRaises(RuntimeError):
+                runner.prepare_sources(work, {"sources": sources})
+            sources["ats"]["override_amanzi_gitlink"] = True
+            (ats_dir / "tracked.txt").write_text("local edit\n")
+            with self.assertRaisesRegex(RuntimeError, "Local changes"):
+                runner.prepare_sources(work, {"sources": sources})
+
+    def test_bundled_pairs_case_integrity_and_changed_input_rejection(self):
+        # Work on a copy of the bundle: the suite files the case locks live outside cases/pairs.
+        root = self.base / "workspace"
+        shutil.copytree(ROOT / "cases/pairs", root / "cases/pairs")
+        suite = root / "cases/pft_tests"
+        for sub in ("data", "templates"):
+            shutil.copytree(ROOT / "cases/pft_tests" / sub, suite / sub)
+        shutil.copy2(ROOT / "cases/pft_tests/suite.json", suite / "suite.json")
+        for rel in runner.pair_input_files(ROOT / "cases/pft_tests/pairs"):
+            (suite / "pairs" / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / "cases/pft_tests/pairs" / rel, suite / "pairs" / rel)
+        with patch.object(runner, "ROOT", root):
+            case = runner.load_case(root / "cases/pairs")
+            self.assertEqual(case["kind"], "pairs")
+            self.assertEqual(len(case["expected"]), 14)
+            self.assertTrue(case["sources"]["ats"]["override_amanzi_gitlink"])
+            namelist = suite / "pairs/bare_ground/standalone.namelist"
+            namelist.write_text(namelist.read_text() + "! edited\n")
+            with self.assertRaisesRegex(ValueError, "pair inputs differ"):
+                runner.load_case(root / "cases/pairs")
+            shutil.copy2(ROOT / "cases/pft_tests/pairs/bare_ground/standalone.namelist", namelist)
+            with (suite / "templates/ecosim_freeze_thaw_hourly.xml").open("a") as stream:
+                stream.write("<!-- edited -->\n")
+            with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
+                runner.load_case(root / "cases/pairs")
+
+    def make_pairs_dir(self):
+        pairs = self.base / "pairs"
+        for rel, text in (("README.md", "r"), ("common/grid.nc", "g"), ("t1/ats_match.xml", "x"),
+                          ("t1/standalone.namelist", "n"), ("t1/sp_phenol.nc", "p"),
+                          ("t1/ats/out.log", "OUTPUT"), ("t1/standalone/out.log", "OUTPUT"),
+                          ("report/index.html", "OUTPUT"), ("ats_match_run.log", "OUTPUT"),
+                          ("standalone_summary.txt", "OUTPUT")):
+            (pairs / rel).parent.mkdir(parents=True, exist_ok=True)
+            (pairs / rel).write_text(text)
+        return pairs
+
+    def test_pair_input_checksum_covers_inputs_only(self):
+        pairs = self.make_pairs_dir()
+        self.assertEqual([r.as_posix() for r in runner.pair_input_files(pairs)],
+                         ["README.md", "common/grid.nc", "t1/ats_match.xml", "t1/sp_phenol.nc", "t1/standalone.namelist"])
+        before = runner.pair_inputs_sha256(pairs)
+        (pairs / "t1/ats/out.log").write_text("DIFFERENT OUTPUT")
+        (pairs / "report/index.html").unlink()
+        self.assertEqual(runner.pair_inputs_sha256(pairs), before)
+        (pairs / "t1/standalone.namelist").write_text("changed")
+        self.assertNotEqual(runner.pair_inputs_sha256(pairs), before)
+
+    def test_pft_file_references_are_pointed_at_the_locked_ecosim(self):
+        pairs = self.base / "pairs"
+        (pairs / "t1").mkdir(parents=True)
+        (pairs / "t1/standalone.namelist").write_text(
+            "pft_file_in = '../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc'\ngrid_file_in = '../../common/grid.nc'\n")
+        (pairs / "t1/ats_match.xml").write_text(
+            '<Parameter name="engine input file" type="string" value="../../../../../repos/dev/ecosim/input_data/ecosim_pftpar_20261021.nc" />\n'
+            '<Parameter name="file" type="string" value="../../../data/forcing.h5" />\n')
+        runner.localize_pair_inputs(pairs, "/ats-build/sources/ecosim")
+        self.assertIn("pft_file_in = '/ats-build/sources/ecosim/input_data/ecosim_pftpar_20261021.nc'",
+                      (pairs / "t1/standalone.namelist").read_text())
+        xml = (pairs / "t1/ats_match.xml").read_text()
+        self.assertIn('value="/ats-build/sources/ecosim/input_data/ecosim_pftpar_20261021.nc"', xml)
+        self.assertIn("../../../data/forcing.h5", xml)            # other paths are untouched
+        empty = self.base / "empty-pairs"
+        (empty / "t1").mkdir(parents=True)
+        (empty / "t1/standalone.namelist").write_text("grid_file_in = 'x'\n")
+        with self.assertRaisesRegex(RuntimeError, "No PFT parameter file reference"):
+            runner.localize_pair_inputs(empty, "/ats-build/sources/ecosim")
+
+    def test_pairs_verification_flags_failed_runs_and_changed_cycle_counts(self):
+        pairs = self.base / "pairs"
+        for name, cycle in (("t1", 100), ("t2", 90)):
+            (pairs / name / "ats").mkdir(parents=True)
+            (pairs / name / "ats/out.log").write_text(
+                f"ATS | Cycle = {cycle},  Time [days] = 728.9,  dt [days] = 0.04\n")
+        case = {"expected": {"t1": {"ats_cycles": 100}, "t2": {"ats_cycles": 100}}, "comparison": {"cycle_tolerance": 0}}
+        results = {"standalone": [("t1", "PASSED", ""), ("t2", "FAILED (rc=1)", "bad")],
+                   "ats-matched": [("t1", "PASSED", ""), ("t2", "PASSED", "")]}
+        verification = runner.verify_pairs(case, results, pairs)
+        self.assertFalse(verification["passed"])
+        self.assertEqual(len(verification["issues"]), 2)
+        self.assertTrue(any("t2 standalone" in i for i in verification["issues"]))
+        self.assertTrue(any("accepted cycles 90, locked 100" in i for i in verification["issues"]))
+        case["expected"]["t2"]["ats_cycles"] = 90
+        results["standalone"][1] = ("t2", "PASSED", "")
+        self.assertTrue(runner.verify_pairs(case, results, pairs)["passed"])
+        case["comparison"]["cycle_tolerance"] = 0
+        case["expected"]["t1"]["ats_cycles"] = 101
+        self.assertFalse(runner.verify_pairs(case, results, pairs)["passed"])
+
     def shallow_fork_clone(self):
         """A depth-1 clone of a fork that, like a GitHub fork, carries no tags."""
         fork = self.repo("fork")

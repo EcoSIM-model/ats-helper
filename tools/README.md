@@ -20,7 +20,7 @@ watchdog, and writes a comparison report. A suite is described by one manifest, 
 
 `run` and `summarize` use only the standard library, so with `--container NAME` they run inside that Docker
 container (the workspace is `/ats-helper` there) where `ats` and the standalone EcoSIM executable are, while
-`inputs`, `pairs` and `report` run on the host. The dev container has no `netCDF4`.
+`inputs`, `pairs` and `report` run on the host (`pip install -r tools/requirements.txt`). The dev container has no `netCDF4`.
 
 ## What `run` checks
 

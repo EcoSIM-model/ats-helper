@@ -77,6 +77,19 @@ and entire case folder. Readers need the helper revision containing that case;
 the case's model pins do not follow later branch updates. Use a new case name
 when changing the scientific baseline.
 
+### Reproduce the paired ATS-EcoSIM / standalone EcoSIM runs
+
+```bash
+./reproduce.sh pairs
+```
+
+The `pairs` case builds the sources pinned in [its definition](cases/pairs/case.json) (Amanzi `f96df4bc`,
+the ATS `ecosim-pk-only` commit from `AndrewGraus/ats`, and the EcoSIM `agraus/standalone_match` commit),
+runs the 14 pairs of [`cases/pft_tests`](cases/pft_tests/suite.json) with ATS-EcoSIM and standalone EcoSIM,
+and checks that every run finished and that the ATS step counts equal the locked ones. It is a different kind
+of case from `200day-adaptive` (a suite of runs, not one checkpoint); see
+[its description](cases/pairs/REPRODUCE.md) for what is pinned, checked and how to read the results.
+
 ## Start the Ubuntu environment
 
 Install and start Docker Desktop (macOS) or Docker Engine (Linux), then run on
