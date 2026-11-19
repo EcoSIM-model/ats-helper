@@ -2,3 +2,13 @@
 /build-logs/
 /.docker/
 __pycache__/
+
+# PFT test suite: run outputs, logs and the generated report (the rendered inputs are committed)
+/cases/pft_tests/pft_*/
+/cases/pft_tests/bare_ground/
+/cases/pft_tests/pairs/*/ats/
+/cases/pft_tests/pairs/*/standalone/
+/cases/pft_tests/pairs/report/
+/cases/pft_tests/*.log
+/cases/pft_tests/suite_summary.txt
+/cases/pft_tests/pairs/*_summary.txt
