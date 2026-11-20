@@ -5,12 +5,12 @@
 `tools/ats_pairs.py` writes a matched standalone EcoSIM case and a revised ATS input on the same graded
 19-layer column, starting both models at 274.15 K, runs both and compares them.
 
-This case builds the model sources recorded in `case.json`, does all of that and checks the result.
+`case.json` in this folder pins the model sources and the inputs; the case builds those sources, does all of the above and checks the result.
 
-    ./reproduce.sh pairs                    # build (hours the first time), pair, run, verify
-    ./reproduce.sh pairs --prepare-only     # download and verify the sources and inputs only
+    ./reproduce.sh pft_tests                    # build (hours the first time), pair, run, verify
+    ./reproduce.sh pft_tests --prepare-only     # download and verify the sources and inputs only
 
-`JOBS=4 ./reproduce.sh pairs` sets the compile jobs (default 2); `PAIRS_JOBS=N` sets how many pairs run
+`JOBS=4 ./reproduce.sh pft_tests` sets the compile jobs (default 2); `PAIRS_JOBS=N` sets how many pairs run
 at once (default: up to 4); `PAIRS_ONLY="name ..."` restricts a run to some inputs, to try the workflow (the
 result is then reported as "not a reproduction"). The build and the runs happen in their own Docker volume,
 named after the case file's hash, so they never touch the development build.
@@ -31,7 +31,7 @@ Amanzi's `TPLVersions.cmake` still names the EcoSIM ref `agraus/PrescribedPhenol
 resolves that name to the locked EcoSIM commit through a local mirror, so the name itself does not matter.
 
 The inputs are locked too: `case.json` lists the checksum of every `*.xml` and every data file of
-`cases/pft_tests`, and of the PFT parameter file in the EcoSIM checkout. A changed, added or removed input
+this folder, and of the PFT parameter file in the EcoSIM checkout. A changed, added or removed input
 stops the case before anything is built. The pairs themselves are not stored: the run writes them from the
 inputs inside the container (the image has the Python packages `pair` needs, and the built TPLs provide the
 `exodus` wrapper of the ATS meshing tools).
@@ -46,11 +46,11 @@ repeat exactly between runs on the reference platform, so a change in any pair s
 This does not compare fields. To judge a run scientifically, build the comparison report from its copy of
 the case (the result page names the directory):
 
-    python3 tools/ats_pairs.py report build-logs/reproduce/pairs/<run>/cases/pft_tests
+    python3 tools/ats_pairs.py report build-logs/reproduce/pft_tests/<run>/cases/pft_tests
 
 ## Results
 
-`build-logs/reproduce/pairs/<run>/` holds `index.html` (status and per-pair table), `report.json`,
+`build-logs/reproduce/pft_tests/<run>/` holds `index.html` (status and per-pair table), `report.json`,
 `verification.json`, the build logs and `cases/pft_tests/`, a copy of the case folder with the pairs and all
 run outputs (several GB).
 

@@ -15,7 +15,7 @@ Ask the agent in plain words; each request below runs the matching skill (in
 | --- | --- |
 | [Download ATS and EcoSIM](.agents/skills/download-ats/SKILL.md) | "download ats-ecosim" |
 | [Build ATS with EcoSIM](.agents/skills/build-ats-ecosim/SKILL.md) | "build ats-ecosim with 4 jobs" |
-| [Reproduce a bundled case](.agents/skills/reproduce-case/SKILL.md) | "reproduce 200day-adaptive" or "reproduce pairs" |
+| [Reproduce a bundled case](.agents/skills/reproduce-case/SKILL.md) | "reproduce 200day-adaptive" or "reproduce pft_tests" |
 | [Configure a coupled case](.agents/skills/configure-ats-ecosim-case/SKILL.md) | "Set up prescribed phenology and map PFTs onto my surface mesh" |
 | [Prepare hourly forcing](.agents/skills/prepare-ats-ecosim-forcing/SKILL.md) | "Convert my DayMet data to hourly ATS–EcoSIM forcing and validate it" |
 | [Extend the interface](.agents/skills/extend-ats-ecosim-interface/SKILL.md) | "Pass a new variable between ATS and EcoSIM with matching C/Fortran layouts" |
@@ -110,7 +110,7 @@ Outputs under `/ats-helper` appear on the host (owned by root on Linux).
 
 ```bash
 ./reproduce.sh 200day-adaptive      # one 200-day column, compared with a reference checkpoint
-./reproduce.sh pairs                # the 14 ATS-EcoSIM / standalone EcoSIM pairs of the cases/pft_tests inputs
+./reproduce.sh pft_tests            # the 14 ATS-EcoSIM / standalone EcoSIM pairs of the pft_tests inputs
 ```
 
 Each case pins the Amanzi, ATS and EcoSIM commits and the checksums of its inputs, downloads the sources,
@@ -122,7 +122,7 @@ simulation or comparison failed; read the report and logs. Options: `JOBS=4` (co
 The reference results are Ubuntu ARM64, single-rank; other platforms may fail the strict comparison. Ubuntu
 packages and transitive downloads are not locked (the report records the image ID and package versions).
 Details: [`cases/200day-adaptive/REPRODUCE.md`](cases/200day-adaptive/REPRODUCE.md) and
-[`cases/pairs/REPRODUCE.md`](cases/pairs/REPRODUCE.md).
+[`cases/pft_tests/REPRODUCE.md`](cases/pft_tests/REPRODUCE.md).
 
 To add a case, create `cases/<name>/case.json` with full commit hashes and SHA-256 checksums (see the
 existing two), commit the whole folder, and use a new name for a changed baseline. Readers need the helper
@@ -135,8 +135,8 @@ revision that contains the case; the pins do not follow later branch updates.
 | [`run_docker.sh`](run_docker.sh) | builds the compiler image, then opens a shell (`--ubuntu`), builds ATS-EcoSIM (`--build-ats-ecosim`) or runs a case (`--reproduce CASE`) |
 | [`reproduce.sh`](reproduce.sh) `CASE` | shorthand for `run_docker.sh --reproduce CASE`; lists the available cases |
 | [`docker/build-ats-ecosim.sh`](docker/build-ats-ecosim.sh) | the in-container build that `--build-ats-ecosim` and the reproduction run |
-| [`docker/reproduce_case.py`](docker/reproduce_case.py) | fetches the pinned sources, builds, runs and verifies a case (`200day-adaptive`, `pairs`) |
-| [`docker/lock_pairs_case.py`](docker/lock_pairs_case.py) | writes `cases/pairs/case.json` from a finished run of a case folder; refuses unless every run passed |
+| [`docker/reproduce_case.py`](docker/reproduce_case.py) | fetches the pinned sources, builds, runs and verifies a case (`200day-adaptive`, `pft_tests`) |
+| [`docker/lock_pairs_case.py`](docker/lock_pairs_case.py) | writes `<case folder>/case.json` from a finished run of a case folder; refuses unless every run passed |
 | [`tools/ats_pairs.py`](tools/ats_pairs.py) | the paired-model tool below |
 
 `tools/ats_pairs.py` turns a case folder into matched pairs and compares them. A case folder, for example

@@ -180,35 +180,35 @@ class CaseTests(unittest.TestCase):
     def test_pairs_case_rejects_added_removed_and_changed_inputs(self):
         root = self.base / "workspace"
         root.mkdir()
-        root = root.resolve()                                                       # macOS temp dirs are symlinks
-        folder = self.make_case_folder(root)
-        files = {(folder / r).relative_to(root).as_posix(): runner.sha256(folder / r) for r in runner.case_input_files(folder)}
-        case = {"case_dir": "cases/mine", "files": files, "pft_file": {}, "comparison": {},
+        folder = self.make_case_folder(root.resolve())
+        files = {r.as_posix(): runner.sha256(folder / r) for r in runner.case_input_files(folder)}
+        case = {"files": files, "pft_file": {}, "comparison": {},
                 "expected": {"t1": {"ats_cycles": 1}, "t2": {"ats_cycles": 2}}, "known_limitations": []}
-        with patch.object(runner, "ROOT", root):
-            runner.load_pairs_case(case)                                            # as locked
-            (folder / "pairs/t1/ats/out.log").write_text("MORE OUTPUT")             # outputs are not inputs
-            runner.load_pairs_case(case)
-            (folder / "t3.xml").write_text("<c/>")
-            with self.assertRaisesRegex(ValueError, "differ from the locked list"):
-                runner.load_pairs_case(case)
-            (folder / "t3.xml").unlink()
-            (folder / "data/forcing.h5").write_text("changed")
-            with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
-                runner.load_pairs_case(case)
-            (folder / "data/forcing.h5").write_text("F")
-            case["expected"].pop("t2")
-            with self.assertRaisesRegex(ValueError, "do not cover exactly"):
-                runner.load_pairs_case(case)
+        runner.load_pairs_case(case, folder)                                        # as locked
+        (folder / "pairs/t1/ats/out.log").write_text("MORE OUTPUT")                 # outputs are not inputs
+        (folder / "case.json").write_text("{}")                                     # nor is the lock itself
+        runner.load_pairs_case(case, folder)
+        (folder / "t3.xml").write_text("<c/>")
+        with self.assertRaisesRegex(ValueError, "differ from the locked list"):
+            runner.load_pairs_case(case, folder)
+        (folder / "t3.xml").unlink()
+        (folder / "data/forcing.h5").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
+            runner.load_pairs_case(case, folder)
+        (folder / "data/forcing.h5").write_text("F")
+        case["expected"].pop("t2")
+        with self.assertRaisesRegex(ValueError, "do not cover exactly"):
+            runner.load_pairs_case(case, folder)
 
-    @unittest.skipUnless((ROOT / "cases/pairs/case.json").is_file(), "needs the pairs case")
-    def test_bundled_pairs_case_matches_the_case_folder(self):
-        case = runner.load_case(ROOT / "cases/pairs")
-        self.assertEqual(case["kind"], "pairs")
+    @unittest.skipUnless((ROOT / "cases/pft_tests/case.json").is_file(), "needs the pft_tests case")
+    def test_bundled_pairs_case_matches_its_own_folder(self):
+        directory = ROOT / "cases/pft_tests"
+        case = runner.load_case(directory)
+        self.assertEqual((case["name"], case["kind"]), ("pft_tests", "pairs"))
         self.assertTrue(case["sources"]["ats"]["override_amanzi_gitlink"])
-        self.assertEqual(case["case_dir"], "cases/pft_tests")
         self.assertEqual(len(case["expected"]), 14)
-        self.assertFalse(list((ROOT / case["case_dir"]).glob("*.py")), "no scripts belong in a case folder")
+        self.assertFalse(list(directory.glob("*.py")), "no scripts belong in a case folder")
+        self.assertNotIn("case.json", case["files"])                                # the lock does not lock itself
 
     def test_pairs_verification_flags_failed_runs_and_changed_cycle_counts(self):
         pairs = self.base / "pairs"

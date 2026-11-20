@@ -53,7 +53,7 @@ done
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 if [[ -n "$reproduce_case" ]]; then
-    if [[ "$build_ats_ecosim" == true || ! "$reproduce_case" =~ ^[a-z0-9][a-z0-9-]*$ ||
+    if [[ "$build_ats_ecosim" == true || ! "$reproduce_case" =~ ^[a-z0-9][a-z0-9_-]*$ ||
           ! -f "$project_dir/cases/$reproduce_case/case.json" ]]; then
         echo 'Select one valid reproduction case, without --build-ats-ecosim.' >&2; exit 2
     fi

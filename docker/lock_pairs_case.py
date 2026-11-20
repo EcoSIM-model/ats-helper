@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Write cases/pairs/case.json, the lock of a paired-model case folder, from a finished run of its pairs.
+"""Write <case folder>/case.json, the lock of a paired-model case folder, from a finished run of its pairs.
 
 The case pins the three source commits, the checksums of the folder's inputs and data, and the ATS
 accepted-cycle count of every pair (from the status.txt that `ats_pairs.py run` wrote). Run this on the host
 after the whole folder passed on a build of the sources it names:
 
     python3 tools/ats_pairs.py all cases/pft_tests --container NAME
-    python3 docker/lock_pairs_case.py \\
+    python3 docker/lock_pairs_case.py --case-dir cases/pft_tests \\
         --amanzi https://github.com/jinyun1tang/amanzi.git@<commit> \\
         --ats https://github.com/AndrewGraus/ats.git@<commit> \\
         --ecosim https://github.com/EcoSIM-model/EcoSIM.git@<commit> \\
@@ -62,7 +62,6 @@ def main():
     parser.add_argument("--ats", required=True)
     parser.add_argument("--ecosim", required=True)
     parser.add_argument("--ecosim-src", required=True, help="checkout of the EcoSIM commit")
-    parser.add_argument("--out", default="cases/pairs/case.json")
     args = parser.parse_args()
 
     case_dir = (ROOT / args.case_dir).resolve()
@@ -94,16 +93,14 @@ def main():
     pft = Path(args.ecosim_src) / pft_name
     case = {
         "schema_version": 1,
-        "name": "pairs",
+        "name": case_dir.name,
         "kind": "pairs",
         "description": DESCRIPTION.format(case_dir=args.case_dir),
         "sources": {"amanzi": source(args.amanzi),
                     "ats": {**source(args.ats), "override_amanzi_gitlink": True},
                     "ecosim": source(args.ecosim)},
-        "case_dir": case_dir.relative_to(ROOT).as_posix(),
         "options": options,
-        "files": {(case_dir / rel).relative_to(ROOT).as_posix(): rc.sha256(case_dir / rel)
-                  for rel in rc.case_input_files(case_dir)},
+        "files": {rel.as_posix(): rc.sha256(case_dir / rel) for rel in rc.case_input_files(case_dir)},
         "pft_file": {"path": pft_name, "sha256": rc.sha256(pft)},
         "expected": expected,
         "comparison": {"cycle_tolerance": 0},
@@ -111,7 +108,7 @@ def main():
                                   "compiler": "GNU C++ / Fortran 13.3", "mpi_ranks": 1},
         "known_limitations": LIMITATIONS,
     }
-    out = ROOT / args.out
+    out = case_dir / "case.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(case, indent=2) + "\n")
     print(f"wrote {out} ({len(names)} pairs)")

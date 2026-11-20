@@ -42,7 +42,7 @@ def load_case(directory):
         if not re.fullmatch(r"[0-9a-f]{40}", source["commit"]):
             raise ValueError("Sources must use full commit hashes")
     if case.get("kind") == "pairs":
-        load_pairs_case(case)
+        load_pairs_case(case, directory)
         return case
     for name, expected in case["files"].items():
         if sha256(case_file(directory, name)) != expected:
@@ -207,31 +207,28 @@ def case_input_files(case_dir):
     return files
 
 
-def load_pairs_case(case):
-    for key in ("case_dir", "files", "pft_file", "expected", "comparison", "known_limitations"):
+def load_pairs_case(case, directory):
+    """the case folder is the case: its inputs and data are locked in case.json, relative to the folder"""
+    for key in ("files", "pft_file", "expected", "comparison", "known_limitations"):
         if key not in case:
             raise ValueError(f"Pairs case lacks {key!r}")
-    case_dir = case_file(ROOT, case["case_dir"])
-    if not case_dir.is_dir():
-        raise ValueError(f"Missing case folder: {case['case_dir']}")
-    actual = {(case_dir / rel).relative_to(ROOT).as_posix() for rel in case_input_files(case_dir)}
+    actual = {rel.as_posix() for rel in case_input_files(directory)}
     if actual != set(case["files"]):
         raise ValueError("The case folder's inputs differ from the locked list: "
                          f"{sorted(actual ^ set(case['files']))}")
     for name, expected in case["files"].items():
-        if sha256(case_file(ROOT, name)) != expected:
+        if sha256(case_file(directory, name)) != expected:
             raise ValueError(f"Checksum mismatch: {name}")
-    if {p.stem for p in case_dir.glob("*.xml")} != set(case["expected"]):
+    if {p.stem for p in directory.glob("*.xml")} != set(case["expected"]):
         raise ValueError("The locked cycle counts do not cover exactly the case folder's inputs")
 
 
-def copy_case(case, run):
+def copy_case(directory, run):
     """copy the case folder's inputs (not its outputs) under the run directory, keeping relative paths valid"""
-    case_dir = case_file(ROOT, case["case_dir"])
-    target = run / case_dir.relative_to(ROOT)
-    for rel in case_input_files(case_dir):
+    target = run / directory.relative_to(ROOT)
+    for rel in case_input_files(directory):
         (target / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(case_dir / rel, target / rel)
+        shutil.copy2(directory / rel, target / rel)
     return target
 
 
@@ -261,7 +258,7 @@ def verify_pairs(case, results, pairs_dir, only=None):
     return {"passed": not issues, "issues": issues, "tests": tests}
 
 
-def run_pairs(case, run, ecosim_src, ats_src, only=None):
+def run_pairs(case, directory, run, ecosim_src, ats_src, only=None):
     """write the pairs of the case folder, then run every pair (standalone EcoSIM, then ATS);
     `only` restricts it to some tests, which is for trying the workflow, not for reproducing"""
     from ats_ecosim_pairs import case as case_mod, jobs as jobs_mod, pairs, runner
@@ -270,7 +267,7 @@ def run_pairs(case, run, ecosim_src, ats_src, only=None):
     pft = Path(ecosim_src) / "input_data" / Path(expected_pft["path"]).name
     if sha256(pft) != expected_pft["sha256"]:
         raise RuntimeError(f"{pft} differs from the locked PFT parameter file")
-    copy = case_mod.load(copy_case(case, run))
+    copy = case_mod.load(copy_case(directory, run))
     pairs.generate_pairs(copy, case.get("options", {}), ecosim_src, ats_src, only)
     # Open MPI refuses to start as root otherwise.
     os.environ.setdefault("OMPI_ALLOW_RUN_AS_ROOT", "1")
@@ -405,7 +402,7 @@ def write_report(run, report, case):
 
 
 def reproduce(name, prepare_only=False):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
         raise ValueError("Invalid case name")
     directory = ROOT / "cases" / name
     case = load_case(directory)
@@ -447,7 +444,7 @@ def reproduce(name, prepare_only=False):
             report["status"] = "running"
             if case.get("kind") == "pairs":
                 only = os.environ.get("PAIRS_ONLY", "").split() or None
-                results, pairs_dir = run_pairs(case, run, base / "sources/ecosim",
+                results, pairs_dir = run_pairs(case, directory, run, base / "sources/ecosim",
                                                base / "sources/amanzi" / ATS_PATH, only)
                 report["status"] = "checking"
                 verification = verify_pairs(case, results, pairs_dir, only)
