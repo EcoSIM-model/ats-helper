@@ -2,3 +2,7 @@
 /build-logs/
 /.docker/
 __pycache__/
+
+# Cases: generated pairs (written by tools/ats_pairs.py pair, with their run outputs and reports) and scratch runs
+/cases/*/pairs/
+/cases/*/_diag_*/

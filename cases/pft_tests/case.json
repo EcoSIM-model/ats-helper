@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "name": "pft_tests",
+  "kind": "pairs",
+  "description": "Paired ATS-EcoSIM and standalone EcoSIM runs of the inputs in cases/pft_tests (bare ground and prescribed-phenology PFT columns, 729 days of hourly Daymet forcing), each pair written by tools/ats_pairs.py from its input with the matched start of both models.",
+  "sources": {
+    "amanzi": {
+      "url": "https://github.com/jinyun1tang/amanzi.git",
+      "commit": "f96df4bce4b61e1232f5fd4bbbb455cbd4cf5ce8"
+    },
+    "ats": {
+      "url": "https://github.com/AndrewGraus/ats.git",
+      "commit": "2ab27a1ee3ec47b0e78f94bd39c881378d5c8769",
+      "override_amanzi_gitlink": true
+    },
+    "ecosim": {
+      "url": "https://github.com/EcoSIM-model/EcoSIM.git",
+      "commit": "7b3517cea2970f1ec3ef773e5e9d4e2918abb335"
+    }
+  },
+  "options": {
+    "start_temperature": 274.15,
+    "layers": 19,
+    "top_dz": 0.05
+  },
+  "files": {
+    "bare_ground.xml": "7114edda1803599f83cd412cd3e74a79318d994d00fba68f2e43d6bb379fe791",
+    "pft_deciduous_lai2.xml": "0696ba28f93167ae6e7c85f9d23e52bafcd223ac823e0a0e8083bfdcf77e6d48",
+    "pft_deciduous_lai4.xml": "037fa4ab48d6114965a946dca2a8a7d59ad70359c71dbad90263b0a041676bcd",
+    "pft_deciduous_lai5.xml": "4f2ae20f3ba00c07c58d22db65dc23a05031a3b8c4248d890f9f80d21b532efa",
+    "pft_evergreen_lai1.xml": "60d998089da7fce32798d0da045079a9a3c9637dddc7ed7e43a1c83f5b9af01c",
+    "pft_evergreen_lai2.xml": "f95e5dccb14863d7216f0925a4259ea64510d91eb605c3402c9108e95f05d734",
+    "pft_evergreen_lai4.xml": "0bb193c94e6c0a3c8187b8e928d195bb5290b03d1ba6331c4c63a02f454aadc5",
+    "pft_evergreen_lai5.xml": "478b0d6f2bb0a389b57a340aed45a7ef57fcaafb1b1fece38d953dedcf539942",
+    "pft_grass_lai0p5.xml": "f23110daad47862f43722db20a00ccffcae103069b91d715ae70783a2b2c3ded",
+    "pft_grass_lai1.xml": "8b8028a622818e5b75623dd4130cd791c2589c25d77603b367593b4aff1e5aa8",
+    "pft_grass_lai3.xml": "49ad42f9928a45f1da105da1762e48345544e840d36c6cfaac69d94e5b81b485",
+    "pft_shrub_lai0p5.xml": "7a9261b8ec31cdc262124ed07f0f950d82e2761e7f1e19ac12fe47d79af1077f",
+    "pft_shrub_lai1.xml": "abdd8f4bad39bc2da020e8cef966ded612549a526b93bbc5b1f1c57979f63b5e",
+    "pft_shrub_lai3.xml": "f9d399c1bcf472fe4604584ba54e1c76392eca01350dd857b9475e376a70f2a3",
+    "data/daymet_TaylorRiverCO_hourly.h5": "862ef83360774c4b2ce09160c93f4f543cedba89f7b4035f46f492a430a1fe58"
+  },
+  "pft_file": {
+    "path": "input_data/ecosim_pftpar_20261021.nc",
+    "sha256": "3327c18ccc5f35dc9749b1f923f8f9906081f5e09a7d420ae22859cde16bad92"
+  },
+  "expected": {
+    "bare_ground": {
+      "ats_cycles": 18130
+    },
+    "pft_deciduous_lai2": {
+      "ats_cycles": 18091
+    },
+    "pft_deciduous_lai4": {
+      "ats_cycles": 17779
+    },
+    "pft_deciduous_lai5": {
+      "ats_cycles": 17681
+    },
+    "pft_evergreen_lai1": {
+      "ats_cycles": 18118
+    },
+    "pft_evergreen_lai2": {
+      "ats_cycles": 18090
+    },
+    "pft_evergreen_lai4": {
+      "ats_cycles": 17773
+    },
+    "pft_evergreen_lai5": {
+      "ats_cycles": 17661
+    },
+    "pft_grass_lai0p5": {
+      "ats_cycles": 17835
+    },
+    "pft_grass_lai1": {
+      "ats_cycles": 18012
+    },
+    "pft_grass_lai3": {
+      "ats_cycles": 17743
+    },
+    "pft_shrub_lai0p5": {
+      "ats_cycles": 18285
+    },
+    "pft_shrub_lai1": {
+      "ats_cycles": 18166
+    },
+    "pft_shrub_lai3": {
+      "ats_cycles": 17830
+    }
+  },
+  "comparison": {
+    "cycle_tolerance": 0
+  },
+  "reference_environment": {
+    "os": "Ubuntu 24.04",
+    "architecture": "aarch64",
+    "compiler": "GNU C++ / Fortran 13.3",
+    "mpi_ranks": 1
+  },
+  "known_limitations": [
+    "Pins model sources, their recursive submodules, the case folder's inputs and data, and each pair's ATS accepted-cycle count. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image identity and installed packages are recorded per run.",
+    "The cycle counts were produced on Ubuntu ARM64 with one MPI rank. Other architectures or toolchains can change them without the physics being wrong; the comparison report (tools/ats_pairs.py report) is the way to judge such a run.",
+    "ATS is a commit that Amanzi's recorded ATS pointer does not name; the runner fetches it from its own URL."
+  ]
+}

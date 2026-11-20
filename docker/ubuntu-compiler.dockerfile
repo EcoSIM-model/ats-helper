@@ -27,6 +27,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     python3 \
     python3-h5py \
     python3-matplotlib \
+    python3-netcdf4 \
     python3-numpy \
     rsync \
     unzip \

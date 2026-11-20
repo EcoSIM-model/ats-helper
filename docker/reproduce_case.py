@@ -18,6 +18,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
 
 
 def sha256(path):
@@ -40,6 +41,9 @@ def load_case(directory):
     for source in case["sources"].values():
         if not re.fullmatch(r"[0-9a-f]{40}", source["commit"]):
             raise ValueError("Sources must use full commit hashes")
+    if case.get("kind") == "pairs":
+        load_pairs_case(case, directory)
+        return case
     for name, expected in case["files"].items():
         if sha256(case_file(directory, name)) != expected:
             raise ValueError(f"Checksum mismatch: {name}")
@@ -60,20 +64,91 @@ def git(path, *args):
     return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
 
 
-def verify_checkout(path, source):
+def verify_checkout(path, source, check_origin=True, ignore_submodules=False):
+    """HEAD is the locked commit, the origin is the locked URL, and nothing is edited.
+
+    check_origin=False and ignore_submodules=True serve an ATS commit that Amanzi does not record:
+    the ATS submodule keeps Amanzi's URL as its origin, and Amanzi sees its pointer as moved."""
     if git(path, "rev-parse", "HEAD") != source["commit"]:
         raise RuntimeError(f"Revision differs in {path}; preserve it and use another case volume")
-    if git(path, "remote", "get-url", "origin") != source["url"]:
+    if check_origin and git(path, "remote", "get-url", "origin") != source["url"]:
         raise RuntimeError(f"Unexpected origin in {path}")
-    if git(path, "status", "--porcelain", "--untracked-files=normal"):
+    status = ["status", "--porcelain", "--untracked-files=normal"]
+    if ignore_submodules:
+        status.append("--ignore-submodules=all")
+    if git(path, *status):
         raise RuntimeError(f"Local changes in {path}; refusing to overwrite them")
+
+
+# Amanzi's and ATS's CMake derive their version strings from `git describe --tags`,
+# and fail to configure when no tag is reachable. Shallow clones have no history, and
+# GitHub forks do not copy upstream tags, so tags are taken from these repositories
+# when the pinned origin cannot describe the commit.
+VERSION_TAG_SOURCES = {
+    "amanzi": "https://github.com/amanzi/amanzi.git",
+    "ats": "https://github.com/amanzi/ats.git",
+}
+
+
+def describable(path):
+    return subprocess.run(["git", "-C", str(path), "describe", "--tags"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def ensure_version_history(path, name):
+    """Fetch full history and tags so `git describe --tags` works; HEAD is unchanged."""
+    shallow = git(path, "rev-parse", "--is-shallow-repository") == "true"
+    if not shallow and describable(path):
+        return
+    head = git(path, "rev-parse", "HEAD")
+    fetch = ["git", "-C", path, "fetch", "--no-recurse-submodules"]
+    if shallow:
+        command(fetch + ["--unshallow", "--tags", "origin"])
+    else:
+        command(fetch + ["--tags", "origin"])
+    upstream = VERSION_TAG_SOURCES.get(name)
+    if not describable(path) and upstream:
+        command(fetch + [upstream, "refs/tags/*:refs/tags/*"])
+    if git(path, "rev-parse", "HEAD") != head:
+        raise RuntimeError(f"Fetching version history moved HEAD in {path}")
+    if not describable(path):
+        raise RuntimeError(f"No reachable tag for {name} in {path}; its version cannot be derived")
+
+
+ATS_PATH = "src/physics/ats"
+GITHUB_SSH = ["-c", "url.https://github.com/.insteadOf=git@github.com:"]
+
+
+def submodule_paths(path):
+    """submodule paths recorded in a checkout's .gitmodules"""
+    listing = subprocess.run(["git", "-C", str(path), "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
+                             capture_output=True, text=True).stdout
+    return [line.split(maxsplit=1)[1] for line in listing.splitlines()]
+
+
+def checkout_pinned_ats(ats, source):
+    """Put ATS on the locked commit when Amanzi does not record it (source['override_amanzi_gitlink']).
+
+    The commit is fetched, with its history, from the case's own URL; the submodule keeps Amanzi's URL
+    as its origin. Branch tips are never followed."""
+    if git(ats, "rev-parse", "HEAD") != source["commit"]:
+        fetch = ["git", "-C", ats, "fetch", "--no-recurse-submodules"]
+        if git(ats, "rev-parse", "--is-shallow-repository") == "true":
+            fetch.append("--unshallow")
+        command(fetch + [source["url"], source["commit"]])
+        command(["git", "-C", ats, "checkout", "--detach", source["commit"]])
+    command(["git", *GITHUB_SSH, "-C", ats, "submodule", "update", "--init", "--recursive", "--depth", "1"])
 
 
 def prepare_sources(base, case):
     sources = base / "sources"
     sources.mkdir(exist_ok=True)
+    ats = sources / "amanzi" / ATS_PATH
+    override = bool(case["sources"]["ats"].get("override_amanzi_gitlink"))
     for name in ("amanzi", "ecosim"):
         path, source = sources / name, case["sources"][name]
+        # An ATS commit that Amanzi does not record leaves Amanzi's ATS pointer moved by design.
+        moved_ats = override and name == "amanzi"
         if not path.exists():
             command(["git", "clone", "--no-checkout", "--depth", "1", source["url"], path])
         # A clone interrupted before checkout can resume. A different committed
@@ -85,7 +160,7 @@ def prepare_sources(base, case):
             if current != source["commit"] and not unpopulated:
                 raise RuntimeError(f"Unexpected existing revision in {path}; leaving it untouched")
             if not unpopulated:
-                verify_checkout(path, source)
+                verify_checkout(path, source, ignore_submodules=moved_ats)
         if git(path, "remote", "get-url", "origin") != source["url"]:
             raise RuntimeError(f"Unexpected origin in {path}")
         if not any(p.name != ".git" for p in path.iterdir()):
@@ -94,19 +169,142 @@ def prepare_sources(base, case):
         # Recursive initialization follows gitlinks, never moving branch tips.
         # EcoSIM records a GitHub SSH URL for ecosim-agent. Public recursive
         # downloads must also work in Docker without forwarding SSH credentials.
-        command(["git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
-                 "-C", path, "submodule", "update", "--init", "--recursive", "--depth", "1"])
-        verify_checkout(path, source)
+        update = ["git", *GITHUB_SSH, "-C", path, "submodule", "update", "--init", "--recursive", "--depth", "1"]
+        if moved_ats and ats.exists() and git(ats, "rev-parse", "HEAD") == case["sources"]["ats"]["commit"]:
+            # Already on the locked ATS: update only the other submodules, so it is not reset to Amanzi's.
+            update += ["--", *[q for q in submodule_paths(path) if q != ATS_PATH]]
+            if len(update) > update.index("--") + 1:
+                command(update)
+        else:
+            command(update)
+        verify_checkout(path, source, ignore_submodules=moved_ats)
         status = git(path, "submodule", "status", "--recursive")
-        if any(line.startswith(("-", "+", "U")) for line in status.splitlines()):
+        if any(line.startswith(("-", "+", "U")) and not (moved_ats and f" {ATS_PATH}" in line)
+               for line in status.splitlines()):
             raise RuntimeError(f"Incomplete or mismatched recursive submodules in {path}")
-    ats = sources / "amanzi/src/physics/ats"
-    verify_checkout(ats, case["sources"]["ats"])
+    if override:
+        checkout_pinned_ats(ats, case["sources"]["ats"])
+    verify_checkout(ats, case["sources"]["ats"], check_origin=not override)
+    for name, path in (("amanzi", sources / "amanzi"), ("ats", ats)):
+        ensure_version_history(path, name)
+        verify_checkout(path, case["sources"][name], check_origin=not (override and name == "ats"),
+                        ignore_submodules=override and name == "amanzi")
     return {name: {"commit": git(path, "rev-parse", "HEAD"),
                    "origin": git(path, "remote", "get-url", "origin"),
                    "recursive_submodules": git(path, "submodule", "status", "--recursive")}
             for name, path in (("amanzi", sources / "amanzi"), ("ats", ats),
                                ("ecosim", sources / "ecosim"))}
+
+
+# ---------------------------------------------------------------------------------------------
+# Paired-model cases (kind "pairs"): a case folder of ATS-EcoSIM inputs (cases/<case_dir>/*.xml and its
+# data), from which tools/ats_pairs.py writes the matched pairs, runs both models and compares the result.
+
+def case_input_files(case_dir):
+    """the inputs of a case folder: its *.xml files and everything under data/ (never pairs/ or run outputs)"""
+    files = [p.relative_to(case_dir) for p in sorted(case_dir.glob("*.xml"))]
+    files += [p.relative_to(case_dir) for p in sorted((case_dir / "data").rglob("*")) if p.is_file()]
+    return files
+
+
+def load_pairs_case(case, directory):
+    """the case folder is the case: its inputs and data are locked in case.json, relative to the folder"""
+    for key in ("files", "pft_file", "expected", "comparison", "known_limitations"):
+        if key not in case:
+            raise ValueError(f"Pairs case lacks {key!r}")
+    actual = {rel.as_posix() for rel in case_input_files(directory)}
+    if actual != set(case["files"]):
+        raise ValueError("The case folder's inputs differ from the locked list: "
+                         f"{sorted(actual ^ set(case['files']))}")
+    for name, expected in case["files"].items():
+        if sha256(case_file(directory, name)) != expected:
+            raise ValueError(f"Checksum mismatch: {name}")
+    if {p.stem for p in directory.glob("*.xml")} != set(case["expected"]):
+        raise ValueError("The locked cycle counts do not cover exactly the case folder's inputs")
+
+
+def copy_case(directory, run):
+    """copy the case folder's inputs (not its outputs) under the run directory, keeping relative paths valid"""
+    target = run / directory.relative_to(ROOT)
+    for rel in case_input_files(directory):
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(directory / rel, target / rel)
+    return target
+
+
+def build_pairs_report(report, run, copy_dir, only=None):
+    """the comparison report of the pairs (tools/ats_pairs.py report); extra to the verification, so a
+    failure is recorded and does not fail the reproduction"""
+    try:
+        from ats_ecosim_pairs import cli
+        code = cli.main(["report", str(copy_dir), *(["--only", *only] if only else [])])
+        index = copy_dir / "pairs/report/index.html"
+        report["comparison_report"] = index.relative_to(run).as_posix() if code == 0 and index.is_file() else f"not built (exit {code})"
+    except BaseException as exc:                  # noqa: BLE001 - SystemExit from the report counts too
+        report["comparison_report"] = f"not built ({type(exc).__name__}: {exc})"
+
+
+def verify_pairs(case, results, pairs_dir, only=None):
+    """every run finished cleanly and the ATS accepted-cycle counts equal the locked ones
+    (for the tests in `only`, or all of them)"""
+    from ats_ecosim_pairs import runner
+
+    issues, tests = [], {}
+    tolerance = case["comparison"]["cycle_tolerance"]
+    for backend, rows in results.items():
+        for name, status, detail in rows:
+            row = tests.setdefault(name, {})
+            row[backend] = {"status": status, "detail": detail}
+            if status != "PASSED":
+                issues.append(f"{name} {backend}: {status}: {detail}")
+    for name, want in case["expected"].items():
+        if only and name not in only:
+            continue
+        row = tests.setdefault(name, {})
+        log = pairs_dir / name / "ats" / "out.log"
+        last = runner.last_cycle(log) if log.is_file() else None
+        got = int(last[0]) if last else None
+        row["ats_cycles"] = {"expected": want["ats_cycles"], "got": got}
+        if got is None or abs(got - want["ats_cycles"]) > tolerance:
+            issues.append(f"{name}: ATS accepted cycles {got}, locked {want['ats_cycles']} (tolerance {tolerance})")
+    return {"passed": not issues, "issues": issues, "tests": tests}
+
+
+def refresh_environment():
+    """Take PATH and LD_LIBRARY_PATH from a login shell.
+
+    reproduce-case.sh sources docker/ats-env.sh before anything is built, and that file adds the install
+    tree's library directories only once the tree exists, so this process (started before the build) has
+    none of them and `ats` cannot load its libraries. The 200day-adaptive run avoids this by starting a
+    login shell for the model; the pairs are started from this process, so its environment is refreshed."""
+    raw = subprocess.check_output(["bash", "--login", "-c", "env -0"])
+    fresh = dict(item.partition(b"=")[::2] for item in raw.split(b"\0") if b"=" in item)
+    for key in ("PATH", "LD_LIBRARY_PATH"):
+        if key.encode() in fresh:
+            os.environ[key] = fresh[key.encode()].decode(errors="replace")
+
+
+def run_pairs(case, directory, run, ecosim_src, ats_src, only=None):
+    """write the pairs of the case folder, then run every pair (standalone EcoSIM, then ATS);
+    `only` restricts it to some tests, which is for trying the workflow, not for reproducing"""
+    from ats_ecosim_pairs import case as case_mod, jobs as jobs_mod, pairs, runner
+
+    expected_pft = case["pft_file"]
+    pft = Path(ecosim_src) / "input_data" / Path(expected_pft["path"]).name
+    if sha256(pft) != expected_pft["sha256"]:
+        raise RuntimeError(f"{pft} differs from the locked PFT parameter file")
+    refresh_environment()
+    copy = case_mod.load(copy_case(directory, run))
+    pairs.generate_pairs(copy, case.get("options", {}), ecosim_src, ats_src, only)
+    # Open MPI refuses to start as root otherwise.
+    os.environ.setdefault("OMPI_ALLOW_RUN_AS_ROOT", "1")
+    os.environ.setdefault("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1")
+    parallel = int(os.environ.get("PAIRS_JOBS", min(4, os.cpu_count() or 1)))
+    results = {}
+    for backend in ("standalone", "ats"):
+        batch = jobs_mod.build_jobs(copy, backend, only=only)
+        results[backend] = runner.run_jobs(batch, parallel=parallel, max_wall_s=120 * 60)
+    return results, copy.pairs_dir
 
 
 def cycle_records(stdout):
@@ -200,9 +398,25 @@ def write_report(run, report, case):
     (run / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     esc = html.escape
     issues = report.get("verification", {}).get("issues", [])
+    shown = report.get("comparison_report", "")
+    links = ("<a href='" + esc(shown) + "'>Comparison report</a> · " if shown.endswith(".html") else "") + \
+        "<a href='report.json'>Full run record</a> · " + (
+        "" if case.get("kind") == "pairs" else "<a href='model.stdout'>Model log</a> · ") + \
+        "<a href='verification.json'>Comparison</a>"
     body = (f"<h1>{esc(case['name'])}</h1><p>Status: <b>{esc(report['status'])}</b></p>"
-            f"<p>{esc(case['description'])}</p><p><a href='report.json'>Full run record</a> · "
-            "<a href='model.stdout'>Model log</a> · <a href='verification.json'>Comparison</a></p>")
+            f"<p>{esc(case['description'])}</p><p>{links}</p>")
+    tests = report.get("verification", {}).get("tests")
+    if tests:
+        rows = "".join(
+            f"<tr><td>{esc(name)}</td><td>{esc(row.get('standalone', {}).get('status', '-'))}</td>"
+            f"<td>{esc(row.get('ats', {}).get('status', '-'))}</td>"
+            f"<td>{esc(str(row.get('ats_cycles', {}).get('got')))} / {esc(str(row.get('ats_cycles', {}).get('expected')))}</td></tr>"
+            for name, row in sorted(tests.items()))
+        body += ("<h2>Pairs</h2><table border='1' cellpadding='4' style='border-collapse:collapse'>"
+                 "<tr><th>test</th><th>standalone</th><th>ATS</th><th>ATS cycles (got / locked)</th></tr>" + rows + "</table>"
+                 "<p>The inputs and outputs of the run are under <code>cases/</code> in this directory; "
+                 "<code>python3 tools/ats_pairs.py report &lt;this directory&gt;/cases/&lt;case&gt;</code> "
+                 "builds the comparison report on the host.</p>")
     if (run / "results.png").exists():
         body += "<a href='results.pdf'><img src='results.png' style='width:100%;max-width:1300px'></a>"
     body += "<h2>Source commits</h2><ul>" + "".join(
@@ -217,7 +431,7 @@ def write_report(run, report, case):
 
 
 def reproduce(name, prepare_only=False):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
         raise ValueError("Invalid case name")
     directory = ROOT / "cases" / name
     case = load_case(directory)
@@ -257,6 +471,19 @@ def reproduce(name, prepare_only=False):
             command(["bash", "--login", ROOT / "docker/build-ats-ecosim.sh"])
             report["executable_sha256"] = sha256(Path(os.environ["AMANZI_DIR"]) / "bin/ats")
             report["status"] = "running"
+            if case.get("kind") == "pairs":
+                only = os.environ.get("PAIRS_ONLY", "").split() or None
+                results, pairs_dir = run_pairs(case, directory, run, base / "sources/ecosim",
+                                               base / "sources/amanzi" / ATS_PATH, only)
+                report["status"] = "checking"
+                verification = verify_pairs(case, results, pairs_dir, only)
+                report["verification"] = verification
+                (run / "verification.json").write_text(json.dumps(verification, indent=2) + "\n")
+                build_pairs_report(report, run, pairs_dir.parent, only)
+                if not verification["passed"]:
+                    raise RuntimeError("Pairs completed but differ from the locked baseline; see verification.json")
+                report["status"] = "passed" if not only else f"passed for {', '.join(only)} only (not a reproduction)"
+                return
             for filename in (case["input"], *(n for n in case["files"] if n.startswith("data/"))):
                 target = run / filename
                 target.parent.mkdir(parents=True, exist_ok=True)

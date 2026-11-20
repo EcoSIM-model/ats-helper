@@ -23,7 +23,7 @@ if [[ $# -eq 0 || "$1" == --help || "$1" == -h ]]; then
 fi
 case_name=$1
 shift
-if [[ ! "$case_name" =~ ^[a-z0-9][a-z0-9-]*$ || ! -f "$project_dir/cases/$case_name/case.json" ]]; then
+if [[ ! "$case_name" =~ ^[a-z0-9][a-z0-9_-]*$ || ! -f "$project_dir/cases/$case_name/case.json" ]]; then
     echo "Unknown case: $case_name" >&2
     usage >&2
     exit 2
