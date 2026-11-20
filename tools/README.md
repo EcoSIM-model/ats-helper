@@ -14,7 +14,7 @@ each, runs both models and compares them. The folder holds only inputs and their
     python tools/ats_pairs.py report    CASE [--only T ...] [--check]
     python tools/ats_pairs.py all       CASE [--container NAME] [--jobs N] [pair options]
 
-Every `*.xml` of the folder is a test, named after the file. `all` is `pair`, `run both` and `report` in turn.
+Every `*.xml` of the folder is a test, named after the file. `all` is `pair`, `run both` and `report` in turn. `pair` warns if the EcoSIM tree's PFT parameter file differs from the one locked in the folder's `case.json`.
 
 | command | what it does | needs |
 |---|---|---|
@@ -23,11 +23,12 @@ Every `*.xml` of the folder is a test, named after the file. `all` is `pair`, `r
 | `summarize` | re-evaluates finished runs from their logs, runs nothing | standard library |
 | `report` | `pairs/report/index.html` (figures embedded) and `report.json` for the vegetated tests; `<test>.html` / `.json` for a test without prescribed phenology | numpy, h5py, netCDF4, matplotlib |
 
-`run` and `summarize` use only the standard library, so with `--container NAME` they run inside that Docker
-container (the workspace is `/ats-helper` there; the case folder must be inside the workspace) where `ats` and
-the standalone EcoSIM executable are, while `pair` and `report` run on the host
-(`pip install -r tools/requirements.txt`). The ATS meshing tools of `pair` need the `exodus` Python wrapper:
-they find it through `PYTHONPATH`, or under `$AMANZI_TPLS_DIR/SEACAS/lib` in the build container.
+With `--container NAME` any command runs inside that Docker container (the workspace is `/ats-helper` there;
+the case folder must be inside the workspace). The container has `ats`, the standalone EcoSIM executable, the
+Python packages and, once the build is done, the `exodus` wrapper the ATS meshing tools of `pair` need
+(under `$AMANZI_TPLS_DIR/SEACAS/lib`), so the whole workflow needs only Docker. Without `--container`, on the
+host, `pair` and `report` need `pip install -r tools/requirements.txt` and an `exodus` wrapper on `PYTHONPATH`;
+`run` and `summarize` need only the standard library but must be where the executables are.
 
 ## What `pair` reads and changes
 

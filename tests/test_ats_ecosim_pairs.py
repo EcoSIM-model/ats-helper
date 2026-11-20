@@ -276,6 +276,27 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("1 passed, 1 did not complete", path.read_text())
 
 
+class ContainerTests(unittest.TestCase):
+    def test_every_command_can_run_inside_a_container(self):
+        from ats_ecosim_pairs import cli
+        for command in ("pair", "run", "summarize", "report", "all"):
+            with mock.patch.object(cli.subprocess, "call", return_value=0) as call:
+                status = cli.main([command, str(ROOT / "cases" / "pft_tests"), "--container", "box", "--only", "a"])
+            self.assertEqual(status, 0)
+            argv = call.call_args[0][0]
+            self.assertEqual(argv[:4], ["docker", "exec", "-i", "box"])
+            self.assertIn(f"ats_pairs.py {command} cases/pft_tests", argv[-1])      # the path as the container sees it
+            self.assertNotIn("--container", argv[-1])                              # so it runs there, not again forwarded
+
+    def test_a_case_outside_the_workspace_cannot_be_run_in_a_container(self):
+        from ats_ecosim_pairs import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "a.xml").write_text("<ParameterList/>")
+            with mock.patch.object(cli.subprocess, "call") as call:
+                self.assertEqual(cli.main(["run", tmp, "--container", "box"]), 2)
+            call.assert_not_called()
+
+
 class JobTests(unittest.TestCase):
     def test_backends_use_the_documented_locations(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -309,6 +330,26 @@ class BareNamelistTests(unittest.TestCase):
         expected = 1.08 * (1.0 - np.exp(-(e / 100.0) ** (t / 2016.0))) * 5.670374419e-8 * t ** 4
         self.assertAlmostEqual(float(pairs.ats_sky_longwave(t, e)), float(expected), places=9)
         self.assertTrue(150.0 < float(pairs.ats_sky_longwave(t, e)) < 330.0)         # a plausible W m-2
+
+    def test_a_locked_pft_file_that_differs_is_reported(self):
+        import hashlib
+        from ats_ecosim_pairs import pairs
+        with tempfile.TemporaryDirectory() as tmp:
+            eco = Path(tmp) / "eco"
+            (eco / "input_data").mkdir(parents=True)
+            (eco / "input_data/pft.nc").write_bytes(b"locked content")
+            folder = Path(tmp) / "case"
+            folder.mkdir()
+            (folder / "a.xml").write_text("<ParameterList/>")
+            c = case_mod.load(folder)
+            self.assertIsNone(pairs.locked_pft_mismatch(c, eco))                  # no lock: nothing to compare
+            lock = {"pft_file": {"path": "input_data/pft.nc", "sha256": hashlib.sha256(b"locked content").hexdigest()}}
+            (folder / "case.json").write_text(json.dumps(lock))
+            self.assertIsNone(pairs.locked_pft_mismatch(c, eco))
+            (eco / "input_data/pft.nc").write_bytes(b"another commit's file")
+            self.assertIn("differs from the PFT parameter file locked", pairs.locked_pft_mismatch(c, eco))
+            (eco / "input_data/pft.nc").unlink()
+            self.assertIn("is missing", pairs.locked_pft_mismatch(c, eco))
 
     def test_plant_free_namelist(self):
         from ats_ecosim_pairs import pairs
@@ -402,6 +443,24 @@ class PairGenerationTests(unittest.TestCase):
 @unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4", "matplotlib")),
                      "report needs numpy, h5py, netCDF4 and matplotlib")
 class ReportTests(unittest.TestCase):
+    def test_the_report_uses_the_tests_that_have_pairs(self):
+        from ats_ecosim_pairs import report
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in ("a", "b"):
+                (Path(tmp) / f"{n}.xml").write_text("<ParameterList/>")
+            (Path(tmp) / "pairs" / "a").mkdir(parents=True)
+            (Path(tmp) / "pairs" / "a" / "pair.json").write_text(json.dumps(
+                {"bare": False, "group": "grass", "lai": 1.0, "ndays": 729, "forcing": "f.h5"}))
+            c = case_mod.load(tmp)
+            report.configure(c)                                           # b has no pair: left out, not an error
+            self.assertEqual(sorted(report.META), ["a"])
+            self.assertEqual((report.NDAYS, report.HOURS), (729, 729 * 24))
+            self.assertEqual(list(report.COLORS), ["grass"])
+            with self.assertRaisesRegex(SystemExit, "no pair for"):
+                report.configure(c, {"b"})                                # asked for explicitly: an error
+            report.configure(c, {"a"})
+            self.assertEqual(sorted(report.META), ["a"])
+
     def test_grading_alignment_and_snow_seasons(self):
         import numpy as np
         from ats_ecosim_pairs import report

@@ -210,6 +210,25 @@ class CaseTests(unittest.TestCase):
         self.assertFalse(list(directory.glob("*.py")), "no scripts belong in a case folder")
         self.assertNotIn("case.json", case["files"])                                # the lock does not lock itself
 
+    def test_refresh_environment_takes_library_paths_from_a_login_shell(self):
+        # before the first build the install tree is absent, so the process starts without its library paths
+        fresh = b"PATH=/ats-build/install/amanzi/bin:/usr/bin\0LD_LIBRARY_PATH=/lib1:/lib2\0OTHER=x\0BAD\0"
+        with patch.dict(os.environ, {"PATH": "/old", "OTHER": "kept"}, clear=False):
+            os.environ.pop("LD_LIBRARY_PATH", None)
+            with patch.object(runner.subprocess, "check_output", return_value=fresh) as call:
+                runner.refresh_environment()
+            self.assertEqual(call.call_args[0][0], ["bash", "--login", "-c", "env -0"])
+            self.assertEqual(os.environ["LD_LIBRARY_PATH"], "/lib1:/lib2")
+            self.assertEqual(os.environ["PATH"], "/ats-build/install/amanzi/bin:/usr/bin")
+            self.assertEqual(os.environ["OTHER"], "kept")                   # nothing else is taken over
+            os.environ.pop("LD_LIBRARY_PATH", None)
+
+    def test_pairs_report_failure_is_recorded_and_does_not_fail_the_reproduction(self):
+        report = {}
+        with patch.dict("sys.modules", {"ats_ecosim_pairs.cli": None}):     # import fails: report packages missing
+            runner.build_pairs_report(report, self.base, self.base / "case")
+        self.assertTrue(report["comparison_report"].startswith("not built"))
+
     def test_pairs_verification_flags_failed_runs_and_changed_cycle_counts(self):
         pairs = self.base / "pairs"
         for name, cycle in (("t1", 100), ("t2", 90)):

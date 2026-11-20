@@ -9,8 +9,10 @@
 CASE is a folder with ATS-EcoSIM inputs (*.xml) and their data, for example cases/pft_tests. For every
 input `pair` writes a matched standalone EcoSIM case and a revised ATS input under CASE/pairs/<test>/,
 `run` runs both with a watchdog, `report` compares them, and `all` does the three in turn. `run` and
-`summarize` need only the standard library; with --container NAME they run inside that Docker container
-(where the executables are) while the other commands run on the host (numpy, h5py, netCDF4, matplotlib).
+`summarize` need only the standard library. With --container NAME any command runs inside that Docker
+container, where the executables, the Python packages and the ATS meshing tools' exodus wrapper are, so
+the whole workflow needs only Docker; without it, on the host (numpy, h5py, netCDF4, matplotlib and an
+exodus wrapper).
 """
 
 import argparse
@@ -27,6 +29,7 @@ from . import render, runner
 
 def _add_common(p, only=True):
     p.add_argument("case", help="case folder with the ATS-EcoSIM inputs (*.xml)")
+    p.add_argument("--container", help="run the command inside this Docker container (the workspace is /ats-helper there)")
     if only:
         p.add_argument("--only", nargs="*", help="only these tests (input file names without .xml)")
 
@@ -50,7 +53,6 @@ def _add_pair(p):
 
 
 def _add_run(p):
-    p.add_argument("--container", help="run inside this Docker container (the workspace is /ats-helper there)")
     p.add_argument("--jobs", type=int, default=1, help="tests run at the same time (default: 1)")
     p.add_argument("--np", type=int, default=1, help="MPI ranks per ATS run (default: 1)")
     p.add_argument("--ats", default="ats", help="ATS executable (default: ats on PATH)")
@@ -79,7 +81,6 @@ def build_parser():
     p = sub.add_parser("summarize", help="re-evaluate finished runs from their logs")
     _add_common(p)
     p.add_argument("backend", nargs="?", choices=[*jobs_mod.BACKENDS, "both"], default="both")
-    p.add_argument("--container", help="run inside this Docker container (the workspace is /ats-helper there)")
 
     p = sub.add_parser("report", help="write the comparison report")
     _add_common(p)
@@ -164,9 +165,9 @@ def do_report(case, args, only):
     status = 0
     names = {t.name for t in case.tests(only)}
     bare = [t.name for t in case.tests(only) if t.is_baseline]
-    vegetated = {t.name for t in case.tests(only, baseline=False)}
-    if vegetated:
-        status = report.build_report(case, "matched", vegetated, args.out, args.check)
+    vegetated = case.tests(only, baseline=False)
+    if vegetated and (only or any(t.group is not None for t in vegetated)):   # `only` stays as asked: unpaired tests are an error then
+        status = report.build_report(case, "matched", only, args.out, args.check)
     for name in bare:
         if report_bare.build(case, name, args.out) and only and name in names:
             status = status or 1                              # an explicit request that could not be met
@@ -179,7 +180,7 @@ def do_report(case, args, only):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     args = build_parser().parse_args(argv)
-    if args.command in ("run", "summarize") and args.container:
+    if args.container:                       # the whole command runs there (it has no --container inside)
         return in_container(args.container, argv, args.case)
     try:
         case = case_mod.load(args.case)
@@ -198,19 +199,11 @@ def main(argv=None):
             return do_run(case, args, only, backends(), summarize=True)
         if args.command == "report":
             return do_report(case, args, only)
-        # all: pair on the host, run in the container if one is named, then report
+        # all: pair, run both models, then report; a failed run does not stop the report of the others
         status = do_pair(case, args, only)
         if status or args.dry_run:
             return status
-        run_argv = ["run", args.case, *(["--only", *sorted(only)] if only else []), "--jobs", str(args.jobs),
-                    "--np", str(args.np), "--ats", args.ats, "--exe", args.exe, "--min-dt-days", str(args.min_dt_days),
-                    "--max-log-gb", str(args.max_log_gb)]
-        if args.max_wall_min is not None:
-            run_argv += ["--max-wall-min", str(args.max_wall_min)]
-        if args.container:
-            run_status = in_container(args.container, run_argv, args.case)
-        else:
-            run_status = main(run_argv)
+        run_status = do_run(case, args, only, jobs_mod.BACKENDS)
         if run_status:
             print("some runs did not complete; building the report from the runs that did", file=sys.stderr)
         return do_report(case, args, only) or run_status

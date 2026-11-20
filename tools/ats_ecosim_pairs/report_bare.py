@@ -142,7 +142,7 @@ def html_page(m, health, health_orig, fig_b64, out):
 
 def build(m, base, out=None):
     """write the report of the bare-ground pair `base`; returns an exit status"""
-    R.configure(m)
+    R.configure(m, {base})
     out = Path(out) if out else R.PAIRS / "report"
     ats_dir, sa_dir = R.PAIRS / base / "ats", R.PAIRS / base / "standalone"
     if not (ats_dir / "surf_prop.dat").is_file() or not list(sa_dir.glob("*.ecosim.h0.*.nc")):

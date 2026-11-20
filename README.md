@@ -53,6 +53,18 @@ git clone --recursive https://github.com/EcoSIM-model/EcoSIM.git "$ECOSIM_SRC_DI
 Check out the Amanzi, ATS and EcoSIM revisions you want before building. For repeatable results pin
 commits, not branches. The `download-ats` skill does this and verifies the result.
 
+To build exactly what the paired runs of `cases/pft_tests` use, take the URLs and commits under `sources` in
+[`cases/pft_tests/case.json`](cases/pft_tests/case.json): clone Amanzi from its URL (not `amanzi/amanzi`) and
+check out its commit, fetch the ATS commit into `$ATS_SRC_DIR` from its own URL (it is not the ATS commit
+Amanzi records) and check it out, and check out the EcoSIM commit:
+
+```bash
+git -C "$ATS_SRC_DIR" fetch <ats url> <ats commit> && git -C "$ATS_SRC_DIR" checkout --detach <ats commit>
+git -C "$ECOSIM_SRC_DIR" checkout --detach <ecosim commit>
+```
+
+`./reproduce.sh pft_tests` does all of this, builds, runs and checks the pairs in its own volume.
+
 ## Build ATS with EcoSIM
 
 Select an ATS revision that contains the EcoSIM kernel (`src/pks/ecosim/EcoSIM_ATS_interface.cc`) and commit
@@ -146,19 +158,24 @@ EcoSIM case and a revised ATS input on the same graded column, derived from the 
 
 | Command | What it does | Where |
 | --- | --- | --- |
-| `pair CASE` | writes `CASE/pairs/<test>/`: the standalone EcoSIM case and the revised ATS input of each `<test>.xml`, plus a README of what is and is not matched | host |
-| `run CASE [standalone\|ats\|both]` | runs the pairs with a watchdog and writes `status.txt` per run and a summary file | in the container (`--container NAME`) |
+| `pair CASE` | writes `CASE/pairs/<test>/`: the standalone EcoSIM case and the revised ATS input of each `<test>.xml`, plus a README of what is and is not matched | container or host |
+| `run CASE [standalone\|ats\|both]` | runs the pairs with a watchdog and writes `status.txt` per run and a summary file | container |
 | `summarize CASE` | re-evaluates finished runs from their logs, runs nothing | either |
-| `report CASE` | comparison report `CASE/pairs/report/index.html` with figures | host |
-| `all CASE` | `pair`, `run both` and `report` in turn | host + container |
+| `report CASE` | comparison report `CASE/pairs/report/index.html` with figures | container or host |
+| `all CASE` | `pair`, `run both` and `report` in turn | container |
+
+Run them inside the built container's shell (`./run_docker.sh --ubuntu`, then `cd /ats-helper`), or from the
+host with `--container NAME` (the name or ID is in `.docker/container.json`; the container must be running).
+The image has the Python packages and the build provides the `exodus` wrapper `pair` needs; on the host `pair`
+and `report` need `tools/requirements.txt` and an `exodus` wrapper of your own.
 
 A run passes only if it reached its end time, exited normally and has no EcoSIM `ENDRUN` (EcoSIM exits with
 code 0 when it aborts); it is stopped on a collapsing timestep, at the wall-clock or at the log-size limit.
 
 ```bash
-pip install -r tools/requirements.txt          # host packages for pair and report
+# inside the container's shell, in /ats-helper (or add --container NAME from the host)
 python3 tools/ats_pairs.py pair cases/pft_tests --dry-run          # what would be matched, or why an input is refused
-python3 tools/ats_pairs.py all  cases/pft_tests --container NAME --jobs 4
+python3 tools/ats_pairs.py all  cases/pft_tests --jobs 4           # pair, run both models, report
 ```
 
 To compare your own input, put `my_input.xml` and its forcing data in `cases/my_case/` and run the same

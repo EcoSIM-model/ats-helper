@@ -43,14 +43,14 @@ reaches day 729 with no EcoSIM `ENDRUN`, no timestep collapse and a normal exit.
 accepted ATS steps of every pair must equal the one in `case.json` (`cycle_tolerance` 0). These counts
 repeat exactly between runs on the reference platform, so a change in any pair shows up.
 
-This does not compare fields. To judge a run scientifically, build the comparison report from its copy of
-the case (the result page names the directory):
-
-    python3 tools/ats_pairs.py report build-logs/reproduce/pft_tests/<run>/cases/pft_tests
+This does not compare fields. The run also builds the comparison report of the pairs
+(`cases/pft_tests/pairs/report/index.html` under the result directory, linked from the result page); if that
+step fails it is noted in `report.json` and does not fail the reproduction. To build it again, from the
+container: `python3 tools/ats_pairs.py report build-logs/reproduce/pft_tests/<run>/cases/pft_tests`.
 
 ## Results
 
-`build-logs/reproduce/pft_tests/<run>/` holds `index.html` (status and per-pair table), `report.json`,
+`build-logs/reproduce/pft_tests/<run>/` holds `index.html` (status, per-pair table and a link to the comparison report), `report.json`,
 `verification.json`, the build logs and `cases/pft_tests/`, a copy of the case folder with the pairs and all
 run outputs (several GB).
 

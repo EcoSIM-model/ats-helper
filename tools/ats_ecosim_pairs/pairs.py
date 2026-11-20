@@ -23,6 +23,7 @@ file it names (site, calendar) and from the options (layers, years, constants). 
 listed in the README it writes. Needs numpy, h5py and netCDF4.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -112,7 +113,8 @@ def write_mesh(dz, depth, nlayers, path, ats_src):
         import meshing_ats
     except ImportError as err:
         raise SystemExit(f"Cannot import the ATS meshing tools from {ats_src}/tools/meshing/meshing_ats "
-                         f"({err}). Use --ats-src, or run inside the ATS container.")
+                         f"({err}). Use --ats-src, or run with --container NAME (the built container has the "
+                         "exodus wrapper and the ATS source).")
     m2 = meshing_ats.Mesh2D.from_Transect(np.array([0.0, 1.0]), np.array([depth, depth]))
     m3 = meshing_ats.Mesh3D.extruded_Mesh2D(m2, ["constant"] * nlayers, list(dz),
                                             [1] * nlayers, [1001] * nlayers)
@@ -443,6 +445,25 @@ def check_file(path, expect):
     d.close()
 
 
+def locked_pft_mismatch(case, ecosim):
+    """a warning if the case folder locks its PFT parameter file (case.json) and the EcoSIM tree has another"""
+    lock = case.root / "case.json"
+    if not lock.is_file():
+        return None
+    try:
+        pft = json.loads(lock.read_text()).get("pft_file")
+    except json.JSONDecodeError:
+        return None
+    if not pft:
+        return None
+    path = ecosim / pft["path"]
+    found = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    if found == pft["sha256"]:
+        return None
+    return (f"{path} {'is missing' if found is None else 'differs from the PFT parameter file locked in case.json'}; "
+            "the results will not match the locked reference. Check out the EcoSIM commit that case.json names.")
+
+
 def plan_test(test, cfg, ecosim, populations):
     """Everything the matched pair of one input needs, read from the input; raises CaseError if it cannot be matched."""
     try:
@@ -646,6 +667,9 @@ def generate_pairs(case, options=None, ecosim_src=None, ats_src=None, only=None,
     if not tests:
         raise CaseError("no tests selected")
     print(f"case {case.name}: {len(tests)} inputs; EcoSIM source {ecosim}")
+    warn = locked_pft_mismatch(case, ecosim)
+    if warn:
+        print(f"WARNING: {warn}")
     plans = []
     for test in tests:                                  # validate all inputs before writing anything
         plan = plan_test(test, cfg, ecosim, populations or {})

@@ -30,7 +30,12 @@ Read the current scripts and [README](../../../README.md) before execution.
 - Inspect origins, commit hashes, working trees, and recursive submodule status.
   Honor user-specified revisions. Otherwise reuse a compatible checkout already
   containing the EcoSIM PK; do not update branch tips just to rebuild.
-- The known build pairing is Amanzi `master`, ATS `agraus/ecosim_pk`, and the
+- For the paired ATS-EcoSIM / standalone EcoSIM work (`cases/pft_tests`), use the sources
+  pinned in `cases/pft_tests/case.json`: Amanzi from `jinyun1tang/amanzi`, ATS from
+  `AndrewGraus/ats` (branch `ecosim-pk-only`; its commit is not the one Amanzi records, so fetch
+  it from its own URL and check it out in the ATS submodule), and EcoSIM from `EcoSIM-model/EcoSIM`
+  (branch `agraus/standalone_match`). `./reproduce.sh pft_tests` does this in its own volume.
+- The older known pairing is Amanzi `master`, ATS `agraus/ecosim_pk`, and the
   EcoSIM ref declared in Amanzi's `config/SuperBuild/TPLVersions.cmake`
   (`agraus/PrescribedPhenology` in the validated build). Confirm the ATS source
   contains `src/pks/ecosim/EcoSIM_ATS_interface.cc`.

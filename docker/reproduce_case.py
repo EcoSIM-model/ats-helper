@@ -232,6 +232,18 @@ def copy_case(directory, run):
     return target
 
 
+def build_pairs_report(report, run, copy_dir, only=None):
+    """the comparison report of the pairs (tools/ats_pairs.py report); extra to the verification, so a
+    failure is recorded and does not fail the reproduction"""
+    try:
+        from ats_ecosim_pairs import cli
+        code = cli.main(["report", str(copy_dir), *(["--only", *only] if only else [])])
+        index = copy_dir / "pairs/report/index.html"
+        report["comparison_report"] = index.relative_to(run).as_posix() if code == 0 and index.is_file() else f"not built (exit {code})"
+    except BaseException as exc:                  # noqa: BLE001 - SystemExit from the report counts too
+        report["comparison_report"] = f"not built ({type(exc).__name__}: {exc})"
+
+
 def verify_pairs(case, results, pairs_dir, only=None):
     """every run finished cleanly and the ATS accepted-cycle counts equal the locked ones
     (for the tests in `only`, or all of them)"""
@@ -258,6 +270,20 @@ def verify_pairs(case, results, pairs_dir, only=None):
     return {"passed": not issues, "issues": issues, "tests": tests}
 
 
+def refresh_environment():
+    """Take PATH and LD_LIBRARY_PATH from a login shell.
+
+    reproduce-case.sh sources docker/ats-env.sh before anything is built, and that file adds the install
+    tree's library directories only once the tree exists, so this process (started before the build) has
+    none of them and `ats` cannot load its libraries. The 200day-adaptive run avoids this by starting a
+    login shell for the model; the pairs are started from this process, so its environment is refreshed."""
+    raw = subprocess.check_output(["bash", "--login", "-c", "env -0"])
+    fresh = dict(item.partition(b"=")[::2] for item in raw.split(b"\0") if b"=" in item)
+    for key in ("PATH", "LD_LIBRARY_PATH"):
+        if key.encode() in fresh:
+            os.environ[key] = fresh[key.encode()].decode(errors="replace")
+
+
 def run_pairs(case, directory, run, ecosim_src, ats_src, only=None):
     """write the pairs of the case folder, then run every pair (standalone EcoSIM, then ATS);
     `only` restricts it to some tests, which is for trying the workflow, not for reproducing"""
@@ -267,6 +293,7 @@ def run_pairs(case, directory, run, ecosim_src, ats_src, only=None):
     pft = Path(ecosim_src) / "input_data" / Path(expected_pft["path"]).name
     if sha256(pft) != expected_pft["sha256"]:
         raise RuntimeError(f"{pft} differs from the locked PFT parameter file")
+    refresh_environment()
     copy = case_mod.load(copy_case(directory, run))
     pairs.generate_pairs(copy, case.get("options", {}), ecosim_src, ats_src, only)
     # Open MPI refuses to start as root otherwise.
@@ -371,7 +398,9 @@ def write_report(run, report, case):
     (run / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     esc = html.escape
     issues = report.get("verification", {}).get("issues", [])
-    links = "<a href='report.json'>Full run record</a> · " + (
+    shown = report.get("comparison_report", "")
+    links = ("<a href='" + esc(shown) + "'>Comparison report</a> · " if shown.endswith(".html") else "") + \
+        "<a href='report.json'>Full run record</a> · " + (
         "" if case.get("kind") == "pairs" else "<a href='model.stdout'>Model log</a> · ") + \
         "<a href='verification.json'>Comparison</a>"
     body = (f"<h1>{esc(case['name'])}</h1><p>Status: <b>{esc(report['status'])}</b></p>"
@@ -450,6 +479,7 @@ def reproduce(name, prepare_only=False):
                 verification = verify_pairs(case, results, pairs_dir, only)
                 report["verification"] = verification
                 (run / "verification.json").write_text(json.dumps(verification, indent=2) + "\n")
+                build_pairs_report(report, run, pairs_dir.parent, only)
                 if not verification["passed"]:
                     raise RuntimeError("Pairs completed but differ from the locked baseline; see verification.json")
                 report["status"] = "passed" if not only else f"passed for {', '.join(only)} only (not a reproduction)"

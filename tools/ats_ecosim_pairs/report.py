@@ -552,14 +552,20 @@ def setup_notes():
 
 
 # ---------------------------------------------------------------------------
-def configure(m):
+def configure(m, only=None):
     """take the case folder's paths, run length and group colors from its pairs"""
     global PAIRS, META, SUITE_DIR, TOL, COLORS, AXIS_LABEL, NDAYS, HOURS
     PAIRS, SUITE_DIR = m.pairs_dir, m.root
-    META = {t.name: m.meta(t.name) for t in m.tests()}
-    missing = [n for n, v in META.items() if v is None]
-    if missing:
+    # tests that have a pair; a requested test without one is an error, any other is left out
+    names = [t.name for t in m.tests(only)]
+    META = {n: m.meta(n) for n in names if m.meta(n) is not None}
+    missing = [n for n in names if n not in META]
+    if missing and only:
         raise SystemExit(f"no pair for {missing}: run the `pair` command first")
+    if missing:
+        print(f"note: no pair for {missing}; they are left out")
+    if not META:
+        raise SystemExit("no pairs: run the `pair` command first")
     lengths = {v["ndays"] for v in META.values()}
     if len(lengths) != 1:
         raise SystemExit(f"the tests of one report must have the same run length; found {sorted(lengths)} days")
@@ -570,7 +576,7 @@ def configure(m):
         if key not in TOL:
             raise ValueError(f"unknown threshold {key!r}; known: {sorted(TOL)}")
         TOL[key] = (TOL[key][0], float(green), float(amber), TOL[key][3])
-    tests = m.tests(baseline=False)
+    tests = [t for t in m.tests(baseline=False) if t.name in META]
     groups = list(dict.fromkeys(t.group for t in tests))
     palette = plt.get_cmap("tab10").colors
     COLORS = {g: DEFAULT_COLORS.get(g) or matplotlib.colors.to_hex(palette[i % 10]) for i, g in enumerate(groups)}
@@ -579,10 +585,10 @@ def configure(m):
 
 def build_report(m, ats_kind="matched", only=None, out=None, check=False):
     """write the report of a suite; returns an exit status (1 if check and a graded quantity is red)"""
-    configure(m)
+    configure(m, only)
     out = Path(out) if out else PAIRS / "report"
     tests = []
-    for t in m.tests(only, baseline=False):
+    for t in (t for t in m.tests(only, baseline=False) if t.name in META):
         ats_dir = PAIRS / t.name / "ats" if ats_kind == "matched" else SUITE_DIR / t.name
         if (ats_dir / "surf_prop.dat").is_file() and list((PAIRS / t.name / "standalone").glob("*.ecosim.h0.*.nc")):
             tests.append((t.name, t.group, float(t.axis[1])))
