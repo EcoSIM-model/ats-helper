@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Write <case folder>/case.json, the lock of a paired-model case folder, from a finished run of its pairs.
 
-The case pins the three source commits, the checksums of the folder's inputs and data, and the ATS
+The case names a source set of the repo-level sources.json (the pinned Amanzi, ATS and EcoSIM commits; edit
+that file to move the pins) and locks the checksums of the folder's inputs and data and the ATS
 accepted-cycle count of every pair (from the status.txt that `ats_pairs.py run` wrote). Run this on the host
-after the whole folder passed on a build of the sources it names:
+after the whole folder passed on a build of that set:
 
     python3 tools/ats_pairs.py all cases/pft_tests --container NAME
-    python3 docker/lock_pairs_case.py --case-dir cases/pft_tests \\
-        --amanzi https://github.com/jinyun1tang/amanzi.git@<commit> \\
-        --ats https://github.com/AndrewGraus/ats.git@<commit> \\
-        --ecosim https://github.com/EcoSIM-model/EcoSIM.git@<commit> \\
+    python3 docker/lock_pairs_case.py --case-dir cases/pft_tests --sources-set ats-ecosim \\
         --ecosim-src repos/dev/ecosim
 
---ecosim-src is a checkout of the EcoSIM commit above; its PFT parameter file is checksummed.
+--ecosim-src is a checkout of the set's EcoSIM commit; its PFT parameter file is checksummed. Without
+--sources-set the case's current set (or the file's default) is kept.
 """
 import argparse
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,16 +36,23 @@ LIMITATIONS = [
     "The cycle counts were produced on Ubuntu ARM64 with one MPI rank. Other architectures or toolchains "
     "can change them without the physics being wrong; the comparison report (tools/ats_pairs.py report) "
     "is the way to judge such a run.",
-    "ATS is a commit that Amanzi's recorded ATS pointer does not name; the runner fetches it from its own URL.",
+    "The source set (sources.json) can name an ATS commit that Amanzi's recorded ATS pointer does not name; the "
+    "runner fetches it from its own URL.",
 ]
 PAIR_OPTIONS = ("start_temperature", "layers", "top_dz")       # recorded in pair.json by `pair`
 
 
-def source(spec_text):
-    url, _, commit = spec_text.rpartition("@")
-    if not url or not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise SystemExit(f"Expected URL@<40-hex commit>, got {spec_text!r}")
-    return {"url": url, "commit": commit}
+def chosen_set(args, case_dir):
+    """the source set to record: --sources-set, else the one the case names now, else the file's default"""
+    sets, default = rc.load_source_sets()
+    name = args.sources_set
+    if not name and (case_dir / "case.json").is_file():
+        current = json.loads((case_dir / "case.json").read_text()).get("sources")
+        name = current if isinstance(current, str) else None
+    name = name or default
+    if name not in sets:
+        raise SystemExit(f"Unknown source set {name!r}; sources.json defines {sorted(sets)}")
+    return name, sets[name]
 
 
 def status_of(path):
@@ -58,14 +65,17 @@ def status_of(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--case-dir", default="cases/pft_tests")
-    parser.add_argument("--amanzi", required=True)
-    parser.add_argument("--ats", required=True)
-    parser.add_argument("--ecosim", required=True)
-    parser.add_argument("--ecosim-src", required=True, help="checkout of the EcoSIM commit")
+    parser.add_argument("--sources-set", help="name of the source set in sources.json (default: the case's, else the default)")
+    parser.add_argument("--ecosim-src", required=True, help="checkout of the set's EcoSIM commit")
     args = parser.parse_args()
 
     case_dir = (ROOT / args.case_dir).resolve()
     pairs = case_dir / "pairs"
+    set_name, sources = chosen_set(args, case_dir)
+    ecosim_head = subprocess.run(["git", "-C", args.ecosim_src, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if ecosim_head != sources["ecosim"]["commit"]:
+        raise SystemExit(f"{args.ecosim_src} is at {ecosim_head[:8] or 'no commit'} but source set {set_name!r} pins EcoSIM "
+                         f"{sources['ecosim']['commit'][:8]}; its PFT file would not be the locked one")
     names = [p.stem for p in sorted(case_dir.glob("*.xml"))]
     if not names:
         raise SystemExit(f"No inputs in {case_dir}")
@@ -96,9 +106,7 @@ def main():
         "name": case_dir.name,
         "kind": "pairs",
         "description": DESCRIPTION.format(case_dir=args.case_dir),
-        "sources": {"amanzi": source(args.amanzi),
-                    "ats": {**source(args.ats), "override_amanzi_gitlink": True},
-                    "ecosim": source(args.ecosim)},
+        "sources": set_name,
         "options": options,
         "files": {rel.as_posix(): rc.sha256(case_dir / rel) for rel in rc.case_input_files(case_dir)},
         "pft_file": {"path": pft_name, "sha256": rc.sha256(pft)},

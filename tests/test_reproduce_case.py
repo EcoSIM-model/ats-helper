@@ -206,6 +206,7 @@ class CaseTests(unittest.TestCase):
         case = runner.load_case(directory)
         self.assertEqual((case["name"], case["kind"]), ("pft_tests", "pairs"))
         self.assertTrue(case["sources"]["ats"]["override_amanzi_gitlink"])
+        self.assertEqual(case["sources_ref"], "ats-ecosim")                         # the pins live in sources.json
         self.assertEqual(len(case["expected"]), 14)
         self.assertFalse(list(directory.glob("*.py")), "no scripts belong in a case folder")
         self.assertNotIn("case.json", case["files"])                                # the lock does not lock itself
@@ -228,6 +229,80 @@ class CaseTests(unittest.TestCase):
         with patch.dict("sys.modules", {"ats_ecosim_pairs.cli": None}):     # import fails: report packages missing
             runner.build_pairs_report(report, self.base, self.base / "case")
         self.assertTrue(report["comparison_report"].startswith("not built"))
+
+    def write_sets(self, **sets):
+        path = self.base / "sources.json"
+        path.write_text(json.dumps({"schema_version": 1, "default": next(iter(sets)),
+                                    "sets": {n: {"description": n, "sources": v} for n, v in sets.items()}}))
+        return path
+
+    @staticmethod
+    def pins(commit="a" * 40):
+        return {n: {"url": f"https://example.test/{n}.git", "commit": commit} for n in ("amanzi", "ats", "ecosim")}
+
+    def test_a_case_names_a_source_set_or_carries_its_own(self):
+        path = self.write_sets(one=self.pins("a" * 40), two=self.pins("b" * 40))
+        self.assertEqual(runner.resolve_sources("two", path)["ats"]["commit"], "b" * 40)
+        inline = self.pins("c" * 40)
+        self.assertIs(runner.resolve_sources(inline, path), inline)
+        with self.assertRaisesRegex(ValueError, "Unknown source set 'three'"):
+            runner.resolve_sources("three", path)
+
+    def test_volume_identity_follows_the_resolved_set_and_inline_cases_keep_their_hash(self):
+        def case_dir(name, sources):
+            folder = self.base / name
+            folder.mkdir()
+            (folder / "case.json").write_text(json.dumps({"name": name, "sources": sources}))
+            return folder
+        path = self.write_sets(one=self.pins("a" * 40))
+        inline = case_dir("inline", self.pins("c" * 40))
+        self.assertEqual(runner.volume_identity(inline, path), self.git(self.base, "hash-object", str(inline / "case.json")))
+        named = case_dir("named", "one")
+        before = runner.volume_identity(named, path)
+        self.write_sets(one=self.pins("a" * 40), added=self.pins("d" * 40))      # another set: no change for this case
+        self.assertEqual(runner.volume_identity(named, path), before)
+        self.write_sets(one=self.pins("e" * 40))                                 # its own pin moved: another volume
+        self.assertNotEqual(runner.volume_identity(named, path), before)
+        self.assertEqual(runner.volume_identity(inline, path), runner.volume_identity(inline, path))
+
+    def test_fetch_sources_clones_the_pins_and_leaves_existing_checkouts_alone(self):
+        import contextlib, io
+        spec = importlib.util.spec_from_file_location("fetch_sources", ROOT / "docker/fetch_sources.py")
+        fetch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fetch)
+        ats, amanzi, ecosim = self.repo("ats-origin"), self.repo("amanzi-origin"), self.repo("ecosim-origin")
+        self.git(amanzi, "-c", "protocol.file.allow=always", "submodule", "add", str(ats), "src/physics/ats")
+        self.commit(amanzi)
+        for tagged in (ats, amanzi):
+            self.git(tagged, "tag", "v1")
+        sources = {n: {"url": str(p), "commit": self.git(p, "rev-parse", "HEAD")}
+                   for n, p in (("amanzi", amanzi), ("ats", ats), ("ecosim", ecosim))}
+        dest = self.base / "repos"
+
+        def run():
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out), \
+                    patch.dict(os.environ, GIT_ALLOW_PROTOCOL="file"):
+                status = fetch.fetch(dest, sources)
+            return status, out.getvalue()
+        status, text = run()
+        self.assertEqual(status, 0, text)
+        self.assertEqual(self.git(dest / "ecosim", "rev-parse", "HEAD"), sources["ecosim"]["commit"])
+        self.assertTrue((dest / "amanzi/src/physics/ats/tracked.txt").exists())
+        # both there: nothing is touched, a checkout at another commit is only reported
+        (dest / "ecosim/tracked.txt").write_text("my own edit\n")
+        sources["ecosim"]["commit"] = "f" * 40
+        status, text = run()
+        self.assertEqual(status, 0)
+        self.assertIn("left as they are", text)
+        self.assertIn("the pin is ffffffff", text)
+        self.assertEqual((dest / "ecosim/tracked.txt").read_text(), "my own edit\n")
+        # only one of the two: an error that changes nothing
+        shutil.rmtree(dest / "ecosim")
+        status, text = run()
+        self.assertEqual(status, 2)
+        self.assertIn("only one of", text)
+        self.assertFalse((dest / "ecosim").exists())
 
     def test_pairs_verification_flags_failed_runs_and_changed_cycle_counts(self):
         pairs = self.base / "pairs"

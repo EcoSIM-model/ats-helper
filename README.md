@@ -42,38 +42,32 @@ session under `.docker/containers/`, ignored by Git). The skills read it and run
 
 ## Download the sources
 
-Inside the container (the login shell sets `AMANZI_SRC_DIR`, `ATS_SRC_DIR` and `ECOSIM_SRC_DIR`):
+The default sources are the pinned set `ats-ecosim` of [`sources.json`](sources.json): Amanzi, ATS (the
+EcoSIM PK) and EcoSIM at fixed commits, the ones `cases/pft_tests` uses. Put them in `repos/` with:
 
 ```bash
-git clone https://github.com/amanzi/amanzi.git "$AMANZI_SRC_DIR"          # /ats-helper/repos/amanzi
-git -C "$AMANZI_SRC_DIR" submodule update --init --recursive               # ATS: $ATS_SRC_DIR
-git clone --recursive https://github.com/EcoSIM-model/EcoSIM.git "$ECOSIM_SRC_DIR"   # /ats-helper/repos/ecosim
+python3 docker/fetch_sources.py        # or: ./run_docker.sh --fetch-sources
 ```
 
-Check out the Amanzi, ATS and EcoSIM revisions you want before building. For repeatable results pin
-commits, not branches. The `download-ats` skill does this and verifies the result.
-
-To build exactly what the paired runs of `cases/pft_tests` use, take the URLs and commits under `sources` in
-[`cases/pft_tests/case.json`](cases/pft_tests/case.json): clone Amanzi from its URL (not `amanzi/amanzi`) and
-check out its commit, fetch the ATS commit into `$ATS_SRC_DIR` from its own URL (it is not the ATS commit
-Amanzi records) and check it out, and check out the EcoSIM commit:
-
-```bash
-git -C "$ATS_SRC_DIR" fetch <ats url> <ats commit> && git -C "$ATS_SRC_DIR" checkout --detach <ats commit>
-git -C "$ECOSIM_SRC_DIR" checkout --detach <ecosim commit>
-```
-
-`./reproduce.sh pft_tests` does all of this, builds, runs and checks the pairs in its own volume.
+This clones `repos/amanzi` (ATS is its `src/physics/ats`) and `repos/ecosim`. It needs only git, Python and
+network access. Existing checkouts are never changed: if `repos/amanzi` and `repos/ecosim` are already there,
+the script only reports whether they are at the pinned commits. `--set NAME` or `--case NAME` selects another
+set. To build other revisions, clone them into those two folders yourself (inside the container the login
+shell sets `AMANZI_SRC_DIR`, `ATS_SRC_DIR` and `ECOSIM_SRC_DIR`); for repeatable results pin commits, not
+branches. `./reproduce.sh pft_tests` fetches the same sources into its own volume, then builds, runs and
+checks the pairs.
 
 ## Build ATS with EcoSIM
 
-Select an ATS revision that contains the EcoSIM kernel (`src/pks/ecosim/EcoSIM_ATS_interface.cc`) and commit
-any edits in the EcoSIM checkout, then build on the host:
+Commit any edits in the EcoSIM checkout, then build on the host:
 
 ```bash
-git -C repos/amanzi/src/physics/ats checkout --detach <ats-commit>
 ./run_docker.sh --ubuntu --build-ats-ecosim            # JOBS=4 ./run_docker.sh ... for four compile jobs
 ```
+
+If `repos/amanzi` and `repos/ecosim` do not exist yet, the build fetches the pinned set first (see above).
+Your own checkouts are built as they are; `ATS_HELPER_SOURCES=local` skips the fetch step altogether. The
+ATS checkout must contain the EcoSIM kernel (`src/pks/ecosim/EcoSIM_ATS_interface.cc`).
 
 The build compiles the third-party libraries, ATS and EcoSIM (from the committed `repos/ecosim`) into the
 volume; the first one takes hours. A cached EcoSIM of another commit stops the build: use a separate volume.
@@ -125,7 +119,8 @@ Outputs under `/ats-helper` appear on the host (owned by root on Linux).
 ./reproduce.sh pft_tests            # the 14 ATS-EcoSIM / standalone EcoSIM pairs of the pft_tests inputs
 ```
 
-Each case pins the Amanzi, ATS and EcoSIM commits and the checksums of its inputs, downloads the sources,
+Each case pins the Amanzi, ATS and EcoSIM commits (inline in its `case.json`, or by naming a set of
+[`sources.json`](sources.json)) and the checksums of its inputs, downloads the sources,
 builds in its own volume (separate from your development build; the first build takes hours), runs, and
 writes an HTML report under `build-logs/reproduce/<case>/<run>/`. A nonzero exit means preparation, build,
 simulation or comparison failed; read the report and logs. Options: `JOBS=4` (compile jobs),
@@ -136,8 +131,8 @@ packages and transitive downloads are not locked (the report records the image I
 Details: [`cases/200day-adaptive/REPRODUCE.md`](cases/200day-adaptive/REPRODUCE.md) and
 [`cases/pft_tests/REPRODUCE.md`](cases/pft_tests/REPRODUCE.md).
 
-To add a case, create `cases/<name>/case.json` with full commit hashes and SHA-256 checksums (see the
-existing two), commit the whole folder, and use a new name for a changed baseline. Readers need the helper
+To add a case, create `cases/<name>/case.json` with its sources (a set name from `sources.json`, or full commit
+hashes inline) and SHA-256 checksums (see the existing two), commit the whole folder, and use a new name for a changed baseline. Readers need the helper
 revision that contains the case; the pins do not follow later branch updates.
 
 ## Tools
@@ -148,6 +143,7 @@ revision that contains the case; the pins do not follow later branch updates.
 | [`reproduce.sh`](reproduce.sh) `CASE` | shorthand for `run_docker.sh --reproduce CASE`; lists the available cases |
 | [`docker/build-ats-ecosim.sh`](docker/build-ats-ecosim.sh) | the in-container build that `--build-ats-ecosim` and the reproduction run |
 | [`docker/reproduce_case.py`](docker/reproduce_case.py) | fetches the pinned sources, builds, runs and verifies a case (`200day-adaptive`, `pft_tests`) |
+| [`docker/fetch_sources.py`](docker/fetch_sources.py) | puts the pinned sources of [`sources.json`](sources.json) in `repos/` (or `--dest`); never changes existing checkouts |
 | [`docker/lock_pairs_case.py`](docker/lock_pairs_case.py) | writes `<case folder>/case.json` from a finished run of a case folder; refuses unless every run passed |
 | [`tools/ats_pairs.py`](tools/ats_pairs.py) | the paired-model tool below |
 

@@ -3,21 +3,7 @@
   "name": "pft_tests",
   "kind": "pairs",
   "description": "Paired ATS-EcoSIM and standalone EcoSIM runs of the inputs in cases/pft_tests (bare ground and prescribed-phenology PFT columns, 729 days of hourly Daymet forcing), each pair written by tools/ats_pairs.py from its input with the matched start of both models.",
-  "sources": {
-    "amanzi": {
-      "url": "https://github.com/jinyun1tang/amanzi.git",
-      "commit": "f96df4bce4b61e1232f5fd4bbbb455cbd4cf5ce8"
-    },
-    "ats": {
-      "url": "https://github.com/AndrewGraus/ats.git",
-      "commit": "f17dff2e4124290a299dba1cdcc16a979b1a7f86",
-      "override_amanzi_gitlink": true
-    },
-    "ecosim": {
-      "url": "https://github.com/EcoSIM-model/EcoSIM.git",
-      "commit": "0c7d37059fc7db7f1191d25c829e184bda2fceef"
-    }
-  },
+  "sources": "ats-ecosim",
   "options": {
     "start_temperature": 274.15,
     "layers": 19,
@@ -100,6 +86,6 @@
   "known_limitations": [
     "Pins model sources, their recursive submodules, the case folder's inputs and data, and each pair's ATS accepted-cycle count. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image identity and installed packages are recorded per run.",
     "The cycle counts were produced on Ubuntu ARM64 with one MPI rank. Other architectures or toolchains can change them without the physics being wrong; the comparison report (tools/ats_pairs.py report) is the way to judge such a run.",
-    "ATS is a commit that Amanzi's recorded ATS pointer does not name; the runner fetches it from its own URL."
+    "The source set (sources.json) can name an ATS commit that Amanzi's recorded ATS pointer does not name; the runner fetches it from its own URL."
   ]
 }

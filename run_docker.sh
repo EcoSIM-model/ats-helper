@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./run_docker.sh [--ubuntu] [--fresh] [--platform linux/amd64|linux/arm64] [--build-ats-ecosim | --reproduce CASE]
+Usage: ./run_docker.sh [--ubuntu] [--fresh] [--platform linux/amd64|linux/arm64] [--build-ats-ecosim | --reproduce CASE | --fetch-sources [SET]]
 
 Build an Ubuntu 24.04 ATS compiler image and open a container shell.
 The latest container record is saved to .docker/container.json.
@@ -12,8 +12,13 @@ The latest container record is saved to .docker/container.json.
                  Existing source and the ATS build volume are preserved.
   --platform     Select the container architecture; defaults to Docker's native one.
   --build-ats-ecosim
-                 Build the selected ATS–EcoSIM sources instead of opening a shell.
+                 Build the ATS–EcoSIM sources in repos/ instead of opening a shell. If repos/amanzi and
+                 repos/ecosim are missing, the pinned default set of sources.json is fetched first
+                 (ATS_HELPER_SOURCES=local skips that and builds what you have).
                  Set JOBS to control parallel compilation (default 2).
+  --fetch-sources [SET]
+                 Put the pinned Amanzi, ATS and EcoSIM sources (the default set of sources.json, or SET)
+                 in repos/amanzi and repos/ecosim; existing checkouts are never changed.
   --reproduce CASE
                  Fetch, build, run, and verify a bundled case in its own volume.
   --prepare-only Only fetch/verify sources and inputs for --reproduce.
@@ -24,6 +29,8 @@ EOF
 build_options=()
 platform_options=()
 build_ats_ecosim=false
+fetch_sources=false
+fetch_set=
 reproduce_case=
 prepare_only=false
 while [[ $# -gt 0 ]]; do
@@ -31,6 +38,9 @@ while [[ $# -gt 0 ]]; do
         --ubuntu) shift ;;
         --fresh) build_options+=(--no-cache); shift ;;
         --build-ats-ecosim) build_ats_ecosim=true; shift ;;
+        --fetch-sources)
+            fetch_sources=true; shift
+            if [[ $# -ge 1 && "$1" != -* ]]; then fetch_set=$1; shift; fi ;;
         --reproduce)
             [[ $# -ge 2 ]] || { echo '--reproduce requires a case name.' >&2; exit 2; }
             reproduce_case=$2; shift 2 ;;
@@ -53,12 +63,14 @@ done
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 if [[ -n "$reproduce_case" ]]; then
-    if [[ "$build_ats_ecosim" == true || ! "$reproduce_case" =~ ^[a-z0-9][a-z0-9_-]*$ ||
+    if [[ "$build_ats_ecosim" == true || "$fetch_sources" == true || ! "$reproduce_case" =~ ^[a-z0-9][a-z0-9_-]*$ ||
           ! -f "$project_dir/cases/$reproduce_case/case.json" ]]; then
         echo 'Select one valid reproduction case, without --build-ats-ecosim.' >&2; exit 2
     fi
 elif [[ "$prepare_only" == true ]]; then
     echo '--prepare-only requires --reproduce CASE.' >&2; exit 2
+elif [[ "$fetch_sources" == true && "$build_ats_ecosim" == true ]]; then
+    echo '--fetch-sources cannot be combined with --build-ats-ecosim (the build fetches by itself).' >&2; exit 2
 fi
 image_name=ats-helper-ubuntu:24.04
 # --mount uses CSV syntax as well as shell argument parsing.
@@ -80,8 +92,17 @@ create_options=()
 container_command=()
 if [[ -n "$reproduce_case" ]]; then
     session_mode=reproduce
-    # git hash-object works on the host without fetching any model source.
-    case_hash=$(git hash-object "$project_dir/cases/$reproduce_case/case.json")
+    # The volume is named after what identifies the case: its case.json and, when it names a source set,
+    # the resolved set (so a changed pin never reuses a volume holding other sources). Cases with inline
+    # sources keep the plain `git hash-object case.json`. Without python3 the files are hashed directly.
+    case_file="$project_dir/cases/$reproduce_case/case.json"
+    if ! case_hash=$(python3 "$project_dir/docker/reproduce_case.py" --identity "$reproduce_case" 2>/dev/null); then
+        if grep -Eq '"sources"[[:space:]]*:[[:space:]]*"' "$case_file"; then
+            case_hash=$(cat "$case_file" "$project_dir/sources.json" | git hash-object --stdin)
+        else
+            case_hash=$(git hash-object "$case_file")
+        fi
+    fi
     compiler_hash=${image_id#sha256:}
     build_volume="ats-helper-reproduce-$reproduce_case-${case_hash:0:12}-$image_arch-${compiler_hash:0:12}"
     create_options+=(-e "JOBS=${JOBS:-2}" -e "ATS_REPRODUCE_IMAGE_ID=$image_id")
@@ -89,8 +110,12 @@ if [[ -n "$reproduce_case" ]]; then
     if [[ "$prepare_only" == true ]]; then container_command+=(--prepare-only); fi
 elif [[ "$build_ats_ecosim" == true ]]; then
     session_mode=build
-    create_options+=(-e "JOBS=${JOBS:-2}")
+    create_options+=(-e "JOBS=${JOBS:-2}" -e "ATS_HELPER_SOURCES=${ATS_HELPER_SOURCES:-pinned}")
     container_command=(bash --login /ats-helper/docker/build-ats-ecosim.sh)
+elif [[ "$fetch_sources" == true ]]; then
+    session_mode=fetch
+    container_command=(python3 /ats-helper/docker/fetch_sources.py)
+    if [[ -n "$fetch_set" ]]; then container_command+=(--set "$fetch_set"); fi
 else
     create_options+=(-it)
 fi
@@ -151,7 +176,7 @@ finish_session() {
 }
 
 # Create first so the exact ID can be recorded before the interactive terminal attaches.
-container_id=$(docker create "${create_options[@]}" ${platform_options[@]+"${platform_options[@]}"} \
+container_id=$(docker create ${create_options[@]+"${create_options[@]}"} ${platform_options[@]+"${platform_options[@]}"} \
     --label "ats-helper.project_dir=$project_dir" \
     --label "ats-helper.context=$docker_context" \
     --label "ats-helper.architecture=$image_arch" \

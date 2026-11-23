@@ -2,6 +2,16 @@
 set -euo pipefail
 
 source /ats-helper/docker/ats-env.sh
+# Without sources of its own, the build gets the pinned default set of sources.json in repos/ (existing
+# checkouts are never changed; ATS_HELPER_SOURCES=local skips this, and a case run prepares its own).
+if [[ "${ATS_HELPER_SOURCES:-pinned}" == pinned ]]; then
+    sources_dir=$(dirname "$AMANZI_SRC_DIR")
+    if [[ "$ECOSIM_SRC_DIR" == "$sources_dir/ecosim" ]]; then
+        python3 /ats-helper/docker/fetch_sources.py --dest "$sources_dir"
+    else
+        echo "Sources are in custom locations; not fetching the pinned set." >&2
+    fi
+fi
 build_jobs=${JOBS:-2}
 if [[ ! "$build_jobs" =~ ^[1-9][0-9]*$ ]]; then
     echo 'JOBS must be a positive integer.' >&2

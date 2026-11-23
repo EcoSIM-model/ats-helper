@@ -106,7 +106,9 @@ At the time of writing, Amanzi `master` selects
 `https://github.com/EcoSIM-model/EcoSIM` and `agraus/PrescribedPhenology`.
 The checked-out Amanzi configuration takes precedence over these examples. For the paired
 runs of `cases/pft_tests`, the Amanzi, ATS and EcoSIM URLs and commits to download are the
-ones pinned in `cases/pft_tests/case.json`, not Amanzi's defaults.
+ones of the default set in `sources.json` (the set `cases/pft_tests/case.json` names), not Amanzi's
+defaults: run `python3 docker/fetch_sources.py`, which puts them in `repos/` and never changes existing
+checkouts.
 Honor an explicit user-specified EcoSIM URL or revision and report that override.
 
 For a new EcoSIM destination, set `ECOSIM_SRC_DIR` to the chosen absolute path,

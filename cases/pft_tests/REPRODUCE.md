@@ -23,7 +23,9 @@ named after the case file's hash, so they never touch the development build.
 | ATS | `AndrewGraus/ats`, branch `ecosim-pk-only` | a commit Amanzi does not record |
 | EcoSIM | `EcoSIM-model/EcoSIM`, branch `agraus/standalone_match` | |
 
-The exact hashes are in `case.json`. Branch names only say where the commits were published; the
+The exact hashes are in the set `ats-ecosim` of the repo-level [`sources.json`](../../sources.json), which this
+case's `case.json` names (`"sources": "ats-ecosim"`); other cases can name the same set or their own. Moving a
+pin means editing `sources.json` and locking the case again. Branch names only say where the commits were published; the
 runner always checks out the commit, never the branch tip. Because Amanzi's recorded ATS pointer is a
 different commit, `override_amanzi_gitlink` makes the runner fetch the ATS commit from its own URL
 after Amanzi's submodules are initialised (Amanzi then sees its ATS pointer as moved, which is expected).
@@ -56,7 +58,7 @@ run outputs (several GB).
 
 ## Refreshing the lock
 
-After changing the sources or the inputs: run the whole case folder on a build of the new sources
+After changing the sources (edit the set in `sources.json`) or the inputs: run the whole case folder on a build of the new sources
 (`python3 tools/ats_pairs.py all cases/pft_tests --container NAME`), then write the case again with
 `docker/lock_pairs_case.py` (its docstring gives the command). It refuses to lock unless every run passed.
 

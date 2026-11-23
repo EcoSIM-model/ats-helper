@@ -32,10 +32,50 @@ def case_file(directory, name):
     return path
 
 
+SOURCES_FILE = ROOT / "sources.json"
+
+
+def load_source_sets(path=SOURCES_FILE):
+    """the named source sets of the repo-level sources.json: {name: {amanzi, ats, ecosim}} and the default name"""
+    data = json.loads(Path(path).read_text())
+    if data.get("schema_version") != 1:
+        raise ValueError(f"Unsupported sources file: {path}")
+    return {name: entry["sources"] for name, entry in data["sets"].items()}, data.get("default")
+
+
+def resolve_sources(value, path=SOURCES_FILE):
+    """the sources of a case: written inline ({amanzi, ats, ecosim}), or the name of a set in sources.json"""
+    if isinstance(value, dict):
+        return value
+    sets, _ = load_source_sets(path)
+    if value not in sets:
+        raise ValueError(f"Unknown source set {value!r}; {path} defines {sorted(sets)}")
+    return json.loads(json.dumps(sets[value]))
+
+
+def identity_bytes(directory, path=SOURCES_FILE):
+    """What identifies a case: its case.json, and, when it names a source set, the resolved set.
+
+    A case with inline sources is identified by case.json alone, as before."""
+    raw = (directory / "case.json").read_bytes()
+    named = json.loads(raw)["sources"]
+    if isinstance(named, str):
+        raw += b"\n" + json.dumps(resolve_sources(named, path), sort_keys=True).encode()
+    return raw
+
+
+def volume_identity(directory, path=SOURCES_FILE):
+    """the Git blob hash of identity_bytes: `git hash-object case.json` for a case with inline sources"""
+    data = identity_bytes(directory, path)
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def load_case(directory):
     case = json.loads((directory / "case.json").read_text())
     if case["schema_version"] != 1 or case["name"] != directory.name:
         raise ValueError("Unsupported or mismatched case definition")
+    case["sources_ref"] = case["sources"] if isinstance(case["sources"], str) else None
+    case["sources"] = resolve_sources(case["sources"])
     if set(case["sources"]) != {"amanzi", "ats", "ecosim"}:
         raise ValueError("Case must lock Amanzi, ATS, and EcoSIM")
     for source in case["sources"].values():
@@ -140,9 +180,10 @@ def checkout_pinned_ats(ats, source):
     command(["git", *GITHUB_SSH, "-C", ats, "submodule", "update", "--init", "--recursive", "--depth", "1"])
 
 
-def prepare_sources(base, case):
-    sources = base / "sources"
-    sources.mkdir(exist_ok=True)
+def prepare_sources(base, case, dest=None):
+    """clone and verify the pinned sources of case["sources"] in `dest` (default: <base>/sources)"""
+    sources = Path(dest) if dest else base / "sources"
+    sources.mkdir(parents=True, exist_ok=True)
     ats = sources / "amanzi" / ATS_PATH
     override = bool(case["sources"]["ats"].get("override_amanzi_gitlink"))
     for name in ("amanzi", "ecosim"):
@@ -442,7 +483,7 @@ def reproduce(name, prepare_only=False):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("Another reproduction is using this volume") from None
-        identity = sha256(directory / "case.json")
+        identity = hashlib.sha256(identity_bytes(directory)).hexdigest()
         saved = base / "case-lock.json"
         if saved.exists() and json.loads(saved.read_text())["manifest_sha256"] != identity:
             raise RuntimeError("Case volume belongs to a different manifest; use its matching volume")
@@ -458,6 +499,8 @@ def reproduce(name, prepare_only=False):
                       "docker/reproduce_case.py", "docker/build-ats-ecosim.sh",
                       "docker/ats-env.sh", "docker/ubuntu-compiler.dockerfile")}}
         shutil.copy2(directory / "case.json", run / "case.json")
+        if case["sources_ref"]:
+            shutil.copy2(SOURCES_FILE, run / "sources.json")
         print(f"Results: {run}", flush=True)
         try:
             report["sources"] = prepare_sources(base, case)
@@ -519,7 +562,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--identity", action="store_true",
+                        help="print the identity of the case (the hash that names its volume) and exit")
     args = parser.parse_args()
+    if args.identity:
+        print(volume_identity(ROOT / "cases" / args.case))
+        sys.exit(0)
     try:
         reproduce(args.case, args.prepare_only)
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as exc:

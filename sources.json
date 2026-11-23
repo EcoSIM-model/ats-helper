@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "default": "ats-ecosim",
+  "sets": {
+    "ats-ecosim": {
+      "description": "ATS with the EcoSIM PK (ecosim-pk-only, shared surface layer removed) and the matching standalone-match EcoSIM; the sources of cases/pft_tests.",
+      "sources": {
+        "amanzi": {
+          "url": "https://github.com/jinyun1tang/amanzi.git",
+          "commit": "f96df4bce4b61e1232f5fd4bbbb455cbd4cf5ce8"
+        },
+        "ats": {
+          "url": "https://github.com/AndrewGraus/ats.git",
+          "commit": "f17dff2e4124290a299dba1cdcc16a979b1a7f86",
+          "override_amanzi_gitlink": true
+        },
+        "ecosim": {
+          "url": "https://github.com/EcoSIM-model/EcoSIM.git",
+          "commit": "0c7d37059fc7db7f1191d25c829e184bda2fceef"
+        }
+      }
+    }
+  }
+}
