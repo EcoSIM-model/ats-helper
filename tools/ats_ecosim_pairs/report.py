@@ -557,7 +557,7 @@ def configure(m, only=None):
     global PAIRS, META, SUITE_DIR, TOL, COLORS, AXIS_LABEL, NDAYS, HOURS
     PAIRS, SUITE_DIR = m.pairs_dir, m.root
     # tests that have a pair; a requested test without one is an error, any other is left out
-    names = [t.name for t in m.tests(only)]
+    names = [t.name for t in m.tests(only, kind="xml")]
     META = {n: m.meta(n) for n in names if m.meta(n) is not None}
     missing = [n for n in names if n not in META]
     if missing and only:
@@ -576,7 +576,7 @@ def configure(m, only=None):
         if key not in TOL:
             raise ValueError(f"unknown threshold {key!r}; known: {sorted(TOL)}")
         TOL[key] = (TOL[key][0], float(green), float(amber), TOL[key][3])
-    tests = [t for t in m.tests(baseline=False) if t.name in META]
+    tests = [t for t in m.tests(baseline=False, kind="xml") if t.name in META]
     groups = list(dict.fromkeys(t.group for t in tests))
     palette = plt.get_cmap("tab10").colors
     COLORS = {g: DEFAULT_COLORS.get(g) or matplotlib.colors.to_hex(palette[i % 10]) for i, g in enumerate(groups)}
@@ -588,7 +588,7 @@ def build_report(m, ats_kind="matched", only=None, out=None, check=False):
     configure(m, only)
     out = Path(out) if out else PAIRS / "report"
     tests = []
-    for t in (t for t in m.tests(only, baseline=False) if t.name in META):
+    for t in (t for t in m.tests(only, baseline=False, kind="xml") if t.name in META):
         ats_dir = PAIRS / t.name / "ats" if ats_kind == "matched" else SUITE_DIR / t.name
         if (ats_dir / "surf_prop.dat").is_file() and list((PAIRS / t.name / "standalone").glob("*.ecosim.h0.*.nc")):
             tests.append((t.name, t.group, float(t.axis[1])))

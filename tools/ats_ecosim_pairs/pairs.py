@@ -104,7 +104,8 @@ def pft_table(pft_file):
 # ---------------------------------------------------------------------------
 # outputs: ATS side
 # ---------------------------------------------------------------------------
-def write_mesh(dz, depth, nlayers, path, ats_src):
+def meshing_ats_module(ats_src):
+    """the ATS meshing tools (and the exodus wrapper of the built TPLs) as a module"""
     sys.path.append(str(Path(ats_src) / "tools" / "meshing" / "meshing_ats"))
     tpls = os.environ.get("AMANZI_TPLS_DIR")           # the built TPLs hold the exodus Python wrapper (SEACAS)
     if tpls:
@@ -115,6 +116,11 @@ def write_mesh(dz, depth, nlayers, path, ats_src):
         raise SystemExit(f"Cannot import the ATS meshing tools from {ats_src}/tools/meshing/meshing_ats "
                          f"({err}). Use --ats-src, or run with --container NAME (the built container has the "
                          "exodus wrapper and the ATS source).")
+    return meshing_ats
+
+
+def write_mesh(dz, depth, nlayers, path, ats_src):
+    meshing_ats = meshing_ats_module(ats_src)
     m2 = meshing_ats.Mesh2D.from_Transect(np.array([0.0, 1.0]), np.array([depth, depth]))
     m3 = meshing_ats.Mesh3D.extruded_Mesh2D(m2, ["constant"] * nlayers, list(dz),
                                             [1] * nlayers, [1001] * nlayers)
@@ -666,12 +672,19 @@ def generate_pairs(case, options=None, ecosim_src=None, ats_src=None, only=None,
     tests = case.tests(only)
     if not tests:
         raise CaseError("no tests selected")
+    if any(t.kind == "namelist" for t in tests):
+        from . import hillslope
     print(f"case {case.name}: {len(tests)} inputs; EcoSIM source {ecosim}")
     warn = locked_pft_mismatch(case, ecosim)
     if warn:
         print(f"WARNING: {warn}")
     plans = []
     for test in tests:                                  # validate all inputs before writing anything
+        if test.kind == "namelist":
+            plan = hillslope.plan_hillslope(test, cfg, ecosim, populations or {})
+            plans.append(plan)
+            print(f"  {test.name:<28} {hillslope.describe(plan)}")
+            continue
         plan = plan_test(test, cfg, ecosim, populations or {})
         plans.append(plan)
         p, v = plan["p"], plan["veg"]
@@ -685,11 +698,16 @@ def generate_pairs(case, options=None, ecosim_src=None, ats_src=None, only=None,
         print("dry run: nothing written")
         return plans
     for plan in plans:
-        write_pair(case, plan, cfg, ecosim, ats_src)
+        (hillslope if plan["test"].kind == "namelist" else sys.modules[__name__]).write_pair(case, plan, cfg, ecosim, ats_src)
         print("wrote", case.pair_dir(plan["test"].name))
+    columns = [pl for pl in plans if pl["test"].kind == "xml"]
+    landscapes = [pl for pl in plans if pl["test"].kind == "namelist"]
     if only:
         print("README.md not rewritten for a subset of the tests")
     else:
-        write_readme(case.pairs_dir / "README.md", plans, cfg)
-        print("wrote", case.pairs_dir / "README.md")
+        if columns:
+            write_readme(case.pairs_dir / "README.md", columns, cfg)
+        if landscapes:
+            hillslope.write_readme(case.pairs_dir / ("README_namelist.md" if columns else "README.md"), landscapes, cfg)
+        print("wrote the README of", case.pairs_dir)
     return plans

@@ -238,12 +238,18 @@ def prepare_sources(base, case, dest=None):
 
 
 # ---------------------------------------------------------------------------------------------
-# Paired-model cases (kind "pairs"): a case folder of ATS-EcoSIM inputs (cases/<case_dir>/*.xml and its
-# data), from which tools/ats_pairs.py writes the matched pairs, runs both models and compares the result.
+# Paired-model cases (kind "pairs"): a case folder of ATS-EcoSIM inputs (cases/<case_dir>/*.xml) or EcoSIM
+# namelists (*.namelist) and its data, from which tools/ats_pairs.py writes the matched pairs, runs both models
+# and compares the result.
+
+def case_test_names(case_dir):
+    """the tests of a case folder: the names of its *.xml and *.namelist files"""
+    return {p.stem for p in [*case_dir.glob("*.xml"), *case_dir.glob("*.namelist")]}
+
 
 def case_input_files(case_dir):
-    """the inputs of a case folder: its *.xml files and everything under data/ (never pairs/ or run outputs)"""
-    files = [p.relative_to(case_dir) for p in sorted(case_dir.glob("*.xml"))]
+    """the inputs of a case folder: its *.xml and *.namelist files and everything under data/ (never pairs/ or run outputs)"""
+    files = [p.relative_to(case_dir) for p in sorted([*case_dir.glob("*.xml"), *case_dir.glob("*.namelist")])]
     files += [p.relative_to(case_dir) for p in sorted((case_dir / "data").rglob("*")) if p.is_file()]
     return files
 
@@ -260,7 +266,7 @@ def load_pairs_case(case, directory):
     for name, expected in case["files"].items():
         if sha256(case_file(directory, name)) != expected:
             raise ValueError(f"Checksum mismatch: {name}")
-    if {p.stem for p in directory.glob("*.xml")} != set(case["expected"]):
+    if case_test_names(directory) != set(case["expected"]):
         raise ValueError("The locked cycle counts do not cover exactly the case folder's inputs")
 
 
@@ -279,8 +285,9 @@ def build_pairs_report(report, run, copy_dir, only=None):
     try:
         from ats_ecosim_pairs import cli
         code = cli.main(["report", str(copy_dir), *(["--only", *only] if only else [])])
-        index = copy_dir / "pairs/report/index.html"
-        report["comparison_report"] = index.relative_to(run).as_posix() if code == 0 and index.is_file() else f"not built (exit {code})"
+        pages = sorted((copy_dir / "pairs/report").glob("*.html"))          # index.html, or <test>.html of a landscape
+        index = next((p for p in pages if p.name == "index.html"), pages[0] if pages else None)
+        report["comparison_report"] = index.relative_to(run).as_posix() if code == 0 and index else f"not built (exit {code})"
     except BaseException as exc:                  # noqa: BLE001 - SystemExit from the report counts too
         report["comparison_report"] = f"not built ({type(exc).__name__}: {exc})"
 

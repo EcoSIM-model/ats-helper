@@ -26,9 +26,8 @@ spec = importlib.util.spec_from_file_location("reproduce_case", ROOT / "docker/r
 rc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rc)
 
-DESCRIPTION = ("Paired ATS-EcoSIM and standalone EcoSIM runs of the inputs in {case_dir} (bare ground and "
-               "prescribed-phenology PFT columns, 729 days of hourly Daymet forcing), each pair written by "
-               "tools/ats_pairs.py from its input with the matched start of both models.")
+DESCRIPTION = ("Paired ATS-EcoSIM and standalone EcoSIM runs of the inputs in {case_dir}, each pair written by "
+               "tools/ats_pairs.py from its input ({kind}) with the matched start of both models.")
 LIMITATIONS = [
     "Pins model sources, their recursive submodules, the case folder's inputs and data, and each pair's ATS "
     "accepted-cycle count. Ubuntu apt packages and transitive build downloads are not fully locked; Docker image "
@@ -39,7 +38,7 @@ LIMITATIONS = [
     "The source set (sources.json) can name an ATS commit that Amanzi's recorded ATS pointer does not name; the "
     "runner fetches it from its own URL.",
 ]
-PAIR_OPTIONS = ("start_temperature", "layers", "top_dz")       # recorded in pair.json by `pair`
+PAIR_OPTIONS = ("start_temperature", "layers", "top_dz")       # recorded in pair.json by `pair`; a landscape has "days" instead of the layers
 
 
 def chosen_set(args, case_dir):
@@ -76,7 +75,7 @@ def main():
     if ecosim_head != sources["ecosim"]["commit"]:
         raise SystemExit(f"{args.ecosim_src} is at {ecosim_head[:8] or 'no commit'} but source set {set_name!r} pins EcoSIM "
                          f"{sources['ecosim']['commit'][:8]}; its PFT file would not be the locked one")
-    names = [p.stem for p in sorted(case_dir.glob("*.xml"))]
+    names = sorted(rc.case_test_names(case_dir))
     if not names:
         raise SystemExit(f"No inputs in {case_dir}")
     expected, options = {}, {}
@@ -85,7 +84,10 @@ def main():
         if not meta_file.is_file():
             raise SystemExit(f"{meta_file} not found: run `ats_pairs.py pair` and run the pairs first")
         meta = json.loads(meta_file.read_text())
-        used = {k: round(meta[k], 6) for k in PAIR_OPTIONS}
+        if meta.get("kind") == "hillslope":
+            used = {"start_temperature": round(meta["start_temperature"], 6), "days": int(meta["ndays"])}
+        else:
+            used = {k: round(meta[k], 6) for k in PAIR_OPTIONS}
         if options and used != options:
             raise SystemExit(f"{name}: pair options {used} differ from the other pairs' {options}")
         options = used
@@ -105,7 +107,9 @@ def main():
         "schema_version": 1,
         "name": case_dir.name,
         "kind": "pairs",
-        "description": DESCRIPTION.format(case_dir=args.case_dir),
+        "description": DESCRIPTION.format(case_dir=args.case_dir, kind=(
+            "EcoSIM namelists of multi-column landscapes" if any(case_dir.glob("*.namelist")) else
+            "ATS-EcoSIM inputs: bare ground and prescribed-phenology PFT columns")),
         "sources": set_name,
         "options": options,
         "files": {rel.as_posix(): rc.sha256(case_dir / rel) for rel in rc.case_input_files(case_dir)},

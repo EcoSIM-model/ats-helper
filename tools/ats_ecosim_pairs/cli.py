@@ -6,7 +6,8 @@
     python tools/ats_pairs.py report    CASE [--only T ...] [--check]
     python tools/ats_pairs.py all       CASE [--container NAME] [--jobs N] [pair options]
 
-CASE is a folder with ATS-EcoSIM inputs (*.xml) and their data, for example cases/pft_tests. For every
+CASE is a folder with ATS-EcoSIM inputs (*.xml) or EcoSIM namelists (*.namelist, multi-column landscapes) and
+their data, for example cases/pft_tests or cases/ert_hillslope. For every
 input `pair` writes a matched standalone EcoSIM case and a revised ATS input under CASE/pairs/<test>/,
 `run` runs both with a watchdog, `report` compares them, and `all` does the three in turn. `run` and
 `summarize` need only the standard library. With --container NAME any command runs inside that Docker
@@ -28,10 +29,10 @@ from . import render, runner
 
 
 def _add_common(p, only=True):
-    p.add_argument("case", help="case folder with the ATS-EcoSIM inputs (*.xml)")
+    p.add_argument("case", help="case folder with the ATS-EcoSIM inputs (*.xml) or EcoSIM namelists (*.namelist)")
     p.add_argument("--container", help="run the command inside this Docker container (the workspace is /ats-helper there)")
     if only:
-        p.add_argument("--only", nargs="*", help="only these tests (input file names without .xml)")
+        p.add_argument("--only", nargs="*", help="only these tests (input file names without .xml or .namelist)")
 
 
 def _add_pair(p):
@@ -41,6 +42,9 @@ def _add_pair(p):
     p.add_argument("--start-temperature", default=str(d["start_temperature"]), metavar="K|xml",
                    help=f"start temperature [K] of both models (default {d['start_temperature']}); the ATS bottom "
                         "temperature becomes this + 0.28 K. 'xml' keeps the input's own")
+    p.add_argument("--days", type=int, default=d["days"],
+                   help=f"run length [d] of a namelist test, at most 365 per standalone year (default {d['days']}); "
+                        "an ATS input has its own")
     p.add_argument("--layers", type=int, default=d["layers"], help=f"graded layers of the column (default {d['layers']})")
     p.add_argument("--top-dz", type=float, default=d["top_dz"], help=f"top layer thickness [m] (default {d['top_dz']})")
     p.add_argument("--particle-density", type=float, default=d["particle_density"], help="standalone particle density [Mg m-3]")
@@ -118,7 +122,7 @@ def in_container(name, argv, case):
 
 def _options(args):
     start = args.start_temperature
-    return {"start_temperature": "xml" if start == "xml" else float(start), "layers": args.layers,
+    return {"start_temperature": "xml" if start == "xml" else float(start), "layers": args.layers, "days": args.days,
             "top_dz": args.top_dz, "particle_density": args.particle_density, "soil_albedo": args.soil_albedo,
             "wind_height": args.wind_height, "longwave": args.longwave}
 
@@ -161,17 +165,21 @@ def do_run(case, args, only, backends, summarize=False):
 
 
 def do_report(case, args, only):
-    from . import report, report_bare                         # needs numpy, h5py, netCDF4, matplotlib
+    from . import report, report_bare, report_hill            # needs numpy, h5py, netCDF4, matplotlib
     status = 0
-    names = {t.name for t in case.tests(only)}
-    bare = [t.name for t in case.tests(only) if t.is_baseline]
-    vegetated = case.tests(only, baseline=False)
+    tests = case.tests(only, kind="xml")
+    names = {t.name for t in tests}
+    bare = [t.name for t in tests if t.is_baseline]
+    vegetated = case.tests(only, baseline=False, kind="xml")
+    landscapes = [t.name for t in case.tests(only, kind="namelist")]
     if vegetated and (only or any(t.group is not None for t in vegetated)):   # `only` stays as asked: unpaired tests are an error then
         status = report.build_report(case, "matched", only, args.out, args.check)
     for name in bare:
         if report_bare.build(case, name, args.out) and only and name in names:
             status = status or 1                              # an explicit request that could not be met
-    if not names:
+    for name in landscapes:                                   # multi-column tests: one report each
+        status = report_hill.build(case, name, args.out, args.check) or status
+    if not names and not landscapes:
         print("nothing to report")
         return 1
     return status

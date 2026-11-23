@@ -150,14 +150,17 @@ revision that contains the case; the pins do not follow later branch updates.
 `tools/ats_pairs.py` turns a case folder into matched pairs and compares them. A case folder, for example
 [`cases/pft_tests`](cases/pft_tests) (bare ground plus PFT columns over LAI), holds ATS-EcoSIM inputs
 (`<test>.xml`, any number) and the data they refer to, and no scripts. For each input it writes a standalone
-EcoSIM case and a revised ATS input on the same graded column, derived from the input itself.
+EcoSIM case and a revised ATS input on the same graded column, derived from the input itself. A folder may
+hold EcoSIM namelists (`<test>.namelist`) of multi-column landscapes instead, such as
+[`cases/ert_hillslope`](cases/ert_hillslope) (six columns on a slope, trees upslope and grass downslope); the
+ATS-EcoSIM input, mesh and forcing are then generated from the namelist and the report compares every column.
 
 | Command | What it does | Where |
 | --- | --- | --- |
 | `pair CASE` | writes `CASE/pairs/<test>/`: the standalone EcoSIM case and the revised ATS input of each `<test>.xml`, plus a README of what is and is not matched | container or host |
 | `run CASE [standalone\|ats\|both]` | runs the pairs with a watchdog and writes `status.txt` per run and a summary file | container |
 | `summarize CASE` | re-evaluates finished runs from their logs, runs nothing | either |
-| `report CASE` | comparison report `CASE/pairs/report/index.html` with figures | container or host |
+| `report CASE` | comparison report `CASE/pairs/report/index.html` (`<test>.html` for a landscape) with figures | container or host |
 | `all CASE` | `pair`, `run both` and `report` in turn | container |
 
 Run them inside the built container's shell (`./run_docker.sh --ubuntu`, then `cd /ats-helper`), or from the

@@ -1,7 +1,9 @@
-"""A case folder: ATS-EcoSIM inputs (*.xml) and the data they refer to; every input is one test.
+"""A case folder: model inputs and the data they refer to; every input is one test.
 
     cases/<case>/
-        <test>.xml            an ATS-EcoSIM input; file names in it are relative to this folder
+        <test>.xml            an ATS-EcoSIM input of one column; file names in it are relative to this folder
+        <test>.namelist       or an EcoSIM namelist of a (multi-column) landscape; the ATS-EcoSIM input is
+                              generated from it. Its file names are relative to this folder
         data/...              forcing and other data the inputs refer to
         pairs/                generated: one matched pair per input (written by `pair`, not committed)
 
@@ -24,6 +26,7 @@ OPTIONS = {
     "wind_height": None,          # None: the EcoSIM PK's "wind speed reference height [m]" of the input
     "longwave": None,             # "ats": give the standalone the sky longwave ATS computes
     "years": [1981, 1982],        # labels of the standalone years (365-day calendar)
+    "days": 729,                  # run length [d] of a namelist test (an ATS input gives its own); at most 365 per year
     "history_fields": ["PSI_vr", "VSPore_vr", "rIceFLP_vr", "RootH2OUptake_vr"],
     "grid_template": "examples/inputs/blodgett/Blodget_grid_20251115.nc",
     "climate_template": "examples/inputs/blodgett/Blodget.clim.2012-2022.nc",
@@ -40,10 +43,16 @@ class CaseError(ValueError):
 @dataclass
 class Test:
     name: str
-    xml: Path
+    source: Path                  # the ATS-EcoSIM input (kind "xml") or the EcoSIM namelist (kind "namelist")
     group: str = None             # vegetation group of the PFT, from the pair's metadata
     axis: tuple = ("lai", None)
     is_baseline: bool = False     # bare ground: no prescribed phenology
+    kind: str = "xml"
+    columns: int = 1              # columns of the model (from the pair's metadata)
+
+    @property
+    def xml(self):
+        return self.source
 
 
 class Case:
@@ -53,15 +62,25 @@ class Case:
             raise CaseError(f"case folder not found: {root}")
         self.name = self.root.name
         self.pairs_dir = self.root / "pairs"
-        if not sorted(self.root.glob("*.xml")):
-            raise CaseError(f"{self.root}: no ATS-EcoSIM input (*.xml) in the case folder")
+        stems = [p.stem for p in sorted(self.root.glob("*.xml")) + sorted(self.root.glob("*.namelist"))]
+        if not stems:
+            raise CaseError(f"{self.root}: no ATS-EcoSIM input (*.xml) or EcoSIM namelist (*.namelist) in the case folder")
+        duplicates = sorted({s for s in stems if stems.count(s) > 1})
+        if duplicates:
+            raise CaseError(f"{self.root}: {duplicates} exist as both .xml and .namelist; every test needs a unique name")
 
     @property
     def thresholds(self):
         return {}
 
+    def sources(self):
+        """{test name: (input file, kind)} in name order"""
+        found = {p.stem: (p, "xml") for p in self.root.glob("*.xml")}
+        found.update({p.stem: (p, "namelist") for p in self.root.glob("*.namelist")})
+        return dict(sorted(found.items()))
+
     def xml_names(self):
-        return [p.stem for p in sorted(self.root.glob("*.xml"))]
+        return list(self.sources())
 
     def pair_dir(self, name):
         return self.pairs_dir / name
@@ -71,9 +90,10 @@ class Case:
         path = self.pair_dir(name) / "pair.json"
         return json.loads(path.read_text()) if path.is_file() else None
 
-    def tests(self, only=None, baseline=True):
+    def tests(self, only=None, baseline=True, kind=None):
         """the tests in file-name order; vegetation group, LAI and bare-ground flag come from the pairs"""
-        names = self.xml_names()
+        sources = self.sources()
+        names = list(sources)
         if only:
             unknown = sorted(set(only) - set(names))
             if unknown:
@@ -85,8 +105,11 @@ class Case:
             bare = bool(meta and meta["bare"])
             if bare and not baseline:
                 continue
-            out.append(Test(name, self.root / f"{name}.xml", meta["group"] if meta else None,
-                            ("lai", meta["lai"] if meta else None), bare))
+            path, test_kind = sources[name]
+            if kind and test_kind != kind:
+                continue
+            out.append(Test(name, path, meta["group"] if meta else None,
+                            ("lai", meta["lai"] if meta else None), bare, test_kind, meta.get("columns", 1) if meta else 1))
         return out
 
 

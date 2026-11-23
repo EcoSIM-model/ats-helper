@@ -12,9 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from ats_ecosim_pairs import case as case_mod, jobs, render, runner, xmledit  # noqa: E402
+from ats_ecosim_pairs import case as case_mod, jobs, namelist, render, runner, xmledit  # noqa: E402
 
 CASE = ROOT / "cases" / "pft_tests"
+HILL = ROOT / "cases" / "ert_hillslope"
 ECOSIM = ROOT / "repos" / "dev" / "ecosim"
 ATS = ROOT / "repos" / "dev" / "ats"
 
@@ -486,6 +487,206 @@ class ReportTests(unittest.TestCase):
         seasons = report.snow_seasons(depth)
         self.assertEqual(len(seasons), 1)
         self.assertEqual((seasons[0]["start_day"], seasons[0]["melt_out_day"], round(seasons[0]["peak"], 2)), (10, 40, 0.5))
+
+
+class NamelistTests(unittest.TestCase):
+    TEXT = textwrap.dedent("""\
+        ! header
+        &ecosim
+        case_name = 'ERT6_SP'   ! comment with = and 'quotes'
+        ldo_sp_mode = .true.
+        forc_periods=1980,1989,6,1990,2021,1,2003,2021,0
+        hist_fincl1='A','B',
+          'C'
+        !idebug_day=186
+        delta = 3600.
+        /
+        &ecosim_time
+        stop_n = 4
+        /
+        """)
+
+    def test_values_are_typed_and_lists_may_span_lines(self):
+        g = namelist.parse(self.TEXT)
+        self.assertEqual(g["ecosim"]["case_name"], "ERT6_SP")
+        self.assertIs(g["ecosim"]["ldo_sp_mode"], True)
+        self.assertEqual(g["ecosim"]["forc_periods"], [1980, 1989, 6, 1990, 2021, 1, 2003, 2021, 0])
+        self.assertEqual(g["ecosim"]["hist_fincl1"], ["A", "B", "C"])
+        self.assertEqual(g["ecosim"]["delta"], 3600.0)
+        self.assertNotIn("idebug_day", g["ecosim"])                     # a comment
+        self.assertEqual(g["ecosim_time"], {"stop_n": 4})
+
+    def test_rewrite_changes_only_the_named_keys_of_the_group(self):
+        out = namelist.rewrite(self.TEXT, {"hist_fincl1": ["X"], "forc_periods": [1981, 1982, 1], "new_key": True})
+        g = namelist.parse(out)
+        self.assertEqual(g["ecosim"]["hist_fincl1"], "X")            # one item: a scalar, as in the namelist
+        self.assertEqual(g["ecosim"]["forc_periods"], [1981, 1982, 1])
+        self.assertIs(g["ecosim"]["new_key"], True)
+        self.assertEqual(g["ecosim"]["case_name"], "ERT6_SP")           # untouched
+        self.assertEqual(g["ecosim_time"], {"stop_n": 4})               # another group is untouched
+        self.assertIn("! header", out)
+        self.assertIn("!idebug_day=186", out)
+        self.assertNotIn("'C'", out)                                    # the continuation line went with its key
+        with self.assertRaisesRegex(ValueError, "no &nope"):
+            namelist.rewrite(self.TEXT, {"a": 1}, "nope")
+
+
+class NamelistCaseTests(unittest.TestCase):
+    def test_a_namelist_is_a_test_and_a_name_may_not_be_used_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "col.xml").write_text("<ParameterList/>")
+            (Path(tmp) / "hill.namelist").write_text("&ecosim\n/\n")
+            c = case_mod.load(tmp)
+            self.assertEqual([(t.name, t.kind) for t in c.tests()], [("col", "xml"), ("hill", "namelist")])
+            self.assertEqual([t.name for t in c.tests(kind="namelist")], ["hill"])
+            (Path(tmp) / "hill.xml").write_text("<ParameterList/>")
+            with self.assertRaisesRegex(case_mod.CaseError, "unique name"):
+                case_mod.load(tmp)
+
+
+@unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4")) and ECOSIM.is_dir()
+                     and (HILL / "ERT6.namelist").is_file(),
+                     "needs numpy, h5py, netCDF4, the dev EcoSIM tree and the ert_hillslope case")
+class HillslopeTests(unittest.TestCase):
+    """the matched landscape of cases/ert_hillslope, up to (not including) the ATS mesh, which needs the exodus wrapper"""
+
+    @classmethod
+    def setUpClass(cls):
+        from ats_ecosim_pairs import hillslope
+        cls.hs = hillslope
+        cls.case = case_mod.load(HILL)
+        cls.plan = hillslope.plan_hillslope(cls.case.tests()[0], dict(case_mod.OPTIONS), ECOSIM, {})
+
+    def test_the_daily_phenology_is_linear_between_the_middles_of_the_months(self):
+        import numpy as np
+        monthly = np.arange(1.0, 13.0)
+        daily = self.hs.daily_phenology(monthly, 365)
+        self.assertEqual(len(daily), 365)
+        self.assertAlmostEqual(daily[15], 1.0 + 15.5 / 31 - 0.5 + 0.0, places=1)     # about the middle of January
+        self.assertTrue(np.all(np.diff(daily[16:350]) > 0))                          # rising through the year
+        self.assertAlmostEqual(self.hs.daily_phenology(np.full(12, 2.5), 100)[50], 2.5)
+
+    def test_the_van_genuchten_fit_passes_through_field_capacity_and_wilting_point(self):
+        alpha, n, sr = self.hs.vg_fit(0.5, 0.25, 0.1, 3.0e4, 1.5e6)
+        def sat(pc):
+            m = 1 - 1 / n
+            return sr + (1 - sr) * (1 + (alpha * pc) ** n) ** (-m)
+        self.assertAlmostEqual(0.5 * sat(3.0e4), 0.25, places=6)
+        self.assertAlmostEqual(0.5 * sat(1.5e6), 0.10, places=6)
+        with self.assertRaisesRegex(case_mod.CaseError, "no van Genuchten"):
+            self.hs.vg_fit(0.5, 0.1, 0.25, 3.0e4, 1.5e6)                              # wilting point wetter than field capacity
+
+    def test_geometry_soil_and_plants_come_from_the_namelist_and_its_files(self):
+        import numpy as np
+        p = self.plan
+        self.assertEqual((p["ncol"], p["n"]), (6, 10))
+        self.assertEqual(list(p["slope_deg"]), [47, 47, 47, 47, 16, 12])
+        self.assertEqual(p["rows"], [19, 19, 19, 19, 77, 77])                         # ndlf43, gr3s43
+        self.assertAlmostEqual(float(p["z_nodes"].min()), 0.0)
+        drops = -np.diff(p["z_nodes"])
+        np.testing.assert_allclose(drops, 40 * np.tan(np.radians([47, 47, 47, 47, 16, 12])))
+        self.assertAlmostEqual(p["depth"], 1.7)
+        self.assertTrue(np.all(p["phi"] > p["theta_fc"]))
+        self.assertEqual((p["T0"], p["bottom_T"]), (274.15, 274.43))
+        self.assertAlmostEqual(p["wt"]["z"], float(p["centers"].min()) - 0.25)
+        self.assertEqual(sorted(self.hs.boundary_faces(p)), ["wt_east", "wt_south_c6"])    # only column 6 reaches the water table
+
+    def test_the_inputs_the_pair_cannot_match_are_refused(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(HILL, Path(tmp) / "c", ignore=shutil.ignore_patterns("pairs"))
+            text = (Path(tmp) / "c" / "ERT6.namelist").read_text()
+            (Path(tmp) / "c" / "ERT6.namelist").write_text(text.replace("ldo_sp_mode = .true.", "ldo_sp_mode = .false."))
+            c = case_mod.load(Path(tmp) / "c")
+            with self.assertRaisesRegex(case_mod.CaseError, "prescribed-phenology"):
+                self.hs.plan_hillslope(c.tests()[0], dict(case_mod.OPTIONS), ECOSIM, {})
+            (Path(tmp) / "c" / "ERT6.namelist").write_text(text.replace("data/ERT_grid_20250826_fcwp.nc", "missing_grid.nc"))
+            with self.assertRaisesRegex(case_mod.CaseError, "grid_file_in"):
+                self.hs.plan_hillslope(c.tests()[0], dict(case_mod.OPTIONS), ECOSIM, {})
+            with self.assertRaisesRegex(case_mod.CaseError, "at most 730"):
+                self.hs.plan_hillslope(case_mod.load(HILL).tests()[0], {**case_mod.OPTIONS, "days": 731}, ECOSIM, {})
+
+    def test_the_files_of_the_pair_are_written_and_consistent(self):
+        import h5py, netCDF4, re
+        import numpy as np
+        from ats_ecosim_pairs.xmledit import parse_xml
+        p, hs = self.plan, self.hs
+        with tempfile.TemporaryDirectory() as tmp:
+            pair = Path(tmp).resolve() / "pairs" / "ERT6"                          # resolved: /var is a link on macOS
+            (pair / "ats").mkdir(parents=True)
+            (pair / "standalone").mkdir()
+            hs.write_forcing(p, pair / "forcing.h5")
+            with h5py.File(pair / "forcing.h5", "r") as f:
+                self.assertEqual(f["air temperature [K]"].shape, (2 * 365 * 24,))
+                self.assertEqual(float(f["solar noon [h]"][0]), p["noon"])
+                lai = f["LAI c5 [m2 m^-2]"][:24 * 365]
+                np.testing.assert_allclose(lai[:24], lai[0])                          # constant within a day
+                self.assertGreater(lai.max(), 2.0)                                    # the grass peak
+                self.assertLess(f["LAI c1 [m2 m^-2]"][:].max(), 1.5)                  # the tree
+            hs.write_grid(p, pair / "grid.nc", case_mod.OPTIONS)
+            hs.write_phenology(p, pair / "sp_phenol.nc")
+            hs.write_standalone_namelist(p, pair, case_mod.OPTIONS)
+            g = netCDF4.Dataset(pair / "grid.nc")
+            self.assertAlmostEqual(float(g["ATCAG"][0]), 274.15 - 273.15, places=5)
+            self.assertEqual(float(np.asarray(g["CORGC"][:]).max()), 0.0)
+            self.assertEqual(float(np.asarray(g["SL0"][:]).max()), 47.0)              # the landscape itself is untouched
+            sp = netCDF4.Dataset(pair / "sp_phenol.nc")
+            self.assertEqual(float(sp["HTOP"][0, 0, 0, 0]), 25.0)                    # the PFT file's height, not the file's 17 m
+            self.assertAlmostEqual(float(sp["HTOP"][0, 5, 0, 0]), 0.8, places=5)
+            from ats_ecosim_pairs import namelist as nl
+            groups = nl.parse((pair / "standalone.namelist").read_text())
+            self.assertEqual(groups["ecosim"]["start_date"], "19810101000000")
+            self.assertEqual(groups["ecosim"]["forc_periods"], [1981, 1982, 1])
+            self.assertEqual((groups["ecosim_time"]["stop_n"], groups["ecosim_time"]["stop_option"]), (729, "ndays"))
+            self.assertEqual(groups["ecosim"]["grid_file_in"], "../grid.nc")
+            self.assertTrue((pair / "standalone" / groups["ecosim"]["clm_hour_file_in"]).resolve().is_file())
+            self.assertTrue((pair / "standalone" / groups["ecosim"]["pft_file_in"]).resolve().is_file())
+            xml = hs.build_xml(p, pair, pair / "hillslope.exo", pair / "forcing.h5", hs.TEMPLATE.read_text(), p["ats_engine"])
+            root = parse_xml(xml).getroot()
+            self.assertEqual(len(re.findall(r'name="layer_\d+" type="ParameterList"><|name="layer_\d+" type="ParameterList">', xml)) > 10, True)
+            for k in range(1, 11):
+                self.assertIn(f'name="layer_{k}"', xml)
+            for c in range(1, 7):
+                self.assertIn(f'name="column_{c}"', xml)
+                self.assertIn(f'name="snow_depth_c{c}"', xml)
+            self.assertNotIn("subsurface properties", xml)
+            self.assertIn('value="19.0"', xml)
+            self.assertIn('value="77.0"', xml)
+            self.assertIn("zero gradient", xml)
+            self.assertIn("function-linear", xml)
+            self.assertIn('name="end time" type="double" value="729.0"', xml)
+            self.assertEqual(render.end_time_days(xml), 729.0)
+            ats_run = pair / "ats"
+            self.assertTrue((ats_run / re.search(r'name="file" type="string" value="([^"]*forcing\.h5)"', xml).group(1)).resolve().is_file())
+
+
+@unittest.skipUnless(all(importlib.util.find_spec(x) for x in ("numpy", "h5py", "netCDF4", "matplotlib")),
+                     "report needs numpy, h5py, netCDF4 and matplotlib")
+class LandscapeReportTests(unittest.TestCase):
+    def meta(self):
+        return {"columns": 3, "layers": 2, "dx": [40.0, 40.0, 20.0], "width": 40.0, "dz": [0.01, 0.1]}
+
+    def vis(self, tmp, volumes):
+        import h5py
+        path = Path(tmp) / "vis.h5"
+        with h5py.File(path, "w") as f:
+            f.create_group("cell_volume").create_dataset("0", data=volumes)
+        return h5py.File(path, "r")
+
+    def test_the_cell_numbering_of_the_vis_file_is_recognised_from_the_volumes(self):
+        import numpy as np
+        from ats_ecosim_pairs import report_hill
+        m = self.meta()
+        area = np.array([1600.0, 1600.0, 800.0])
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.vis(tmp, np.concatenate([area * 0.01, area * 0.1])) as f:          # layer-major, as the mesh writes it
+                where = report_hill.cell_map(f, m)
+            self.assertEqual((where(0, 2), where(1, 0), where(1, 2)), (2, 3, 5))
+            with self.vis(tmp, np.concatenate([[a * 0.01, a * 0.1] for a in area])) as f:  # column-major
+                where = report_hill.cell_map(f, m)
+            self.assertEqual((where(0, 2), where(1, 0), where(1, 2)), (4, 1, 5))
+            with self.vis(tmp, np.ones(6)) as f, self.assertRaises(SystemExit):
+                report_hill.cell_map(f, m)
 
 
 if __name__ == "__main__":
