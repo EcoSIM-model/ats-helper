@@ -10,12 +10,12 @@
     },
     "ats": {
       "url": "https://github.com/AndrewGraus/ats.git",
-      "commit": "2ab27a1ee3ec47b0e78f94bd39c881378d5c8769",
+      "commit": "f17dff2e4124290a299dba1cdcc16a979b1a7f86",
       "override_amanzi_gitlink": true
     },
     "ecosim": {
       "url": "https://github.com/EcoSIM-model/EcoSIM.git",
-      "commit": "7b3517cea2970f1ec3ef773e5e9d4e2918abb335"
+      "commit": "0c7d37059fc7db7f1191d25c829e184bda2fceef"
     }
   },
   "options": {
