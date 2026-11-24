@@ -75,9 +75,12 @@ EcoSIM `input_data`):
   field capacity and wilting point (`FC`, `WP`, which must be written out in the grid file, not `-1`), the
   conductivity (`SCNV`) and the water at field capacity (`THW = 1`). The van Genuchten curve of each ATS
   layer is fitted through the field capacity and the wilting point;
-* plants: the PFT code, population, monthly LAI, SAI and height of each column. ATS gets the vegetation type
-  (the row of the PFT file) per column and the daily LAI and SAI EcoSIM interpolates from the months; the height
-  is that of the PFT file in both models;
+* plants: the PFT code, monthly LAI, SAI and height of each column. ATS gets the vegetation type (the row of the
+  PFT file) per column and the daily LAI and SAI EcoSIM interpolates from the months; the height is that of the
+  PFT file in both models. ATS has no population input (the coupled path uses a default per root biome, 0.6
+  plants m-2 for these trees and 40 for the grass), so the standalone copy gets the same population in place of
+  the file's (`--population CODE=VALUE` changes the standalone side only). The ATS input visualizes the
+  canopy water potential and temperature;
 * water table and boundaries: a stationary horizontal water table (`DTBLIG` below the lowest column) becomes a
   hydrostatic pressure on the faces of the columns that reach it; surface runoff out of the east end (`RCHQEG`)
   becomes a zero-gradient outlet;

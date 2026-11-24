@@ -42,6 +42,11 @@ GRAVITY = 9.80665
 RHO = 1000.0
 P_ATM = 101325.0
 SURFACE_LAYER_ID = 1001             # element block of layer 1 in the mesh; layer k has 1000 + k
+# Population density [plants m-2] by Jackson biome (IROOTJK of the PFT file) that the coupled path gives every PFT:
+# PltPopDef of SetRootProfileZ (PrescribePhenolMod.F90). ATS has no population input, so the standalone run is given
+# the same values; the phenology file's own population (0.1 trees and 300 grass in ERT6) would change the
+# hydraulics of the plants (the root length and leaf area per plant).
+COUPLED_POPULATION = (0.6, 1.0, 1.0, 0.6, 0.6, 40.0, 0.6, 0.6, 40.0, 40.0)
 SOLID_DENSITY_REFERENCE = "the particle density of the options (EcoSIM derives porosity from bulk density with it)"
 
 
@@ -200,6 +205,7 @@ def plan_hillslope(test, cfg, ecosim, populations):
     codes = [b"".join(sp_unit["pft_type"][0, u, 0]).decode().strip("\x00 ") for u in sp_order]
     pft_names = _pft_names(files["pft"])
     heights_table = _pft_heights(files["pft"])
+    root_types = _pft_root_types(files["pft"])
     rows = []
     for c, code in enumerate(codes, start=1):
         if code not in pft_names:
@@ -268,7 +274,9 @@ def plan_hillslope(test, cfg, ecosim, populations):
 
     populations = populations or {}
     assumed_population = []
+    pop_file = pop.copy()
     for c in range(ncol):
+        pop[c] = COUPLED_POPULATION[int(root_types[rows[c] - 1]) - 1]          # what the coupled path uses
         given = next((populations[k] for k in (name, codes[c], f"c{c + 1}") if k in populations), None)
         if given is not None:
             pop[c] = given
@@ -277,7 +285,7 @@ def plan_hillslope(test, cfg, ecosim, populations):
         test=test, nl=nl, groups=groups, files=files, ncol=ncol, dx=dx, width=width, x_nodes=x_nodes, z_nodes=z_nodes,
         centers=centers, slope_deg=slope_deg, aspect=aspect, n=n, dz=dz, bottoms=bottoms, depth=float(bottoms[-1]),
         soil=soil, phi=phi, theta_fc=theta_fc, theta_wp=theta_wp, vg=vg, perm=perm, psi_fc=psi_fc, psi_wp=psi_wp,
-        codes=codes, rows=rows, lai=lai, sai=sai, htop=htop, pop=pop, heights_table=[float(heights_table[r - 1]) for r in rows],
+        codes=codes, rows=rows, lai=lai, sai=sai, htop=htop, pop=pop, pop_file=pop_file, heights_table=[float(heights_table[r - 1]) for r in rows],
         years=years, ndays=ndays, latitude=latitude, noon=noon, wind_height=wind_height, forcing=forcing,
         T0=T0, bottom_T=bottom_T, atca=atca, wt=wt, sides=sides, runoff=runoff, unit_order=[int(u) for u in order],
         particle_density=pd, assumed_population=assumed_population, ats_engine=files["pft"])
@@ -289,6 +297,14 @@ def _pft_names(pft_file):
     names = [b"".join(row).decode().strip("\x00 ") for row in d["pfts"][:]]
     d.close()
     return names
+
+
+def _pft_root_types(pft_file):
+    d = netCDF4.Dataset(pft_file)
+    d.set_auto_mask(False)
+    t = np.asarray(d["IROOTJK"][:], float)
+    d.close()
+    return t
 
 
 def _pft_heights(pft_file):
@@ -485,6 +501,7 @@ def build_xml(plan, pair, mesh, forcing_h5, template_text, pft_file):
     set_param(eco, "number of pfts", "1", "int")
     set_param(eco, "engine input file", os.path.relpath(pft_file, ats_run), "string")
     set_param(eco, "wind speed reference height [m]", plan["wind_height"], "double")
+    set_param(eco, "visualize ecosim state", "{canopy_water_potential, canopy_temperature}", "Array(string)")
     for sub in eco:
         if sub.tag == "ParameterList" and sub.get("name") in ("starting year", "starting day of year [0-364]",
                                                                "starting hour [h]", "latitude [degrees]", "solar noon [h]"):
@@ -634,7 +651,7 @@ def write_grid(plan, path, cfg):
 
 
 def write_phenology(plan, path):
-    """the phenology file with the canopy height of the PFT file, which is what the coupled path uses"""
+    """the phenology file with the canopy height of the PFT file and the population of the coupled path"""
     src, dst = copy_structure(plan["files"]["phenology"], path)
     for name, v in src.variables.items():
         dst[name][...] = v[...]
@@ -644,6 +661,7 @@ def write_phenology(plan, path):
     sp.close()
     for u, col in enumerate(nh1):
         dst["HTOP"][0, u, 0, :] = plan["heights_table"][col - 1]
+        dst["PlantPopuLive_pft"][0, u, 0] = plan["pop"][col - 1]
     dst.close()
 
 
@@ -695,7 +713,8 @@ def write_pair(case, plan, cfg, ecosim, ats_src):
     meta = dict(
         name=test.name, kind="hillslope", columns=plan["ncol"], bare=False, group="landscape",
         pft=plan["codes"], row=plan["rows"], lai=float(np.mean(plan["lai"])), sai=float(np.mean(plan["sai"])),
-        height=plan["heights_table"], population=[float(v) for v in plan["pop"]], forcing="forcing.h5",
+        height=plan["heights_table"], population=[float(v) for v in plan["pop"]],
+        population_file=[float(v) for v in plan["pop_file"]], forcing="forcing.h5",
         ndays=plan["ndays"], years=plan["years"], start_temperature=plan["T0"], bottom_temperature=plan["bottom_T"],
         layers=plan["n"], depth=plan["depth"], dz=[float(v) for v in plan["dz"]],
         dx=[float(v) for v in plan["dx"]], width=plan["width"], x_nodes=[float(v) for v in plan["x_nodes"]],
@@ -741,7 +760,9 @@ Generated by `tools/ats_pairs.py pair`; do not edit by hand. Each pair is in `pa
 
 The surface elevation is integrated from the slopes as EcoSIM does (`StartsMod.F90`); the lowest node is z = 0.
 The height is that of the PFT parameter file, which the coupled path uses; the phenology file's own height
-is replaced in the standalone copy. The population of the ATS PK is not an input.
+is replaced in the standalone copy. ATS has no population input: the coupled path uses a default per root biome
+(`SetRootProfileZ`), so the standalone copy gets the same population in place of the file's ({', '.join(f"{v:g}" for v in first['pop_file'])}).
+`--population CODE=VALUE` changes only the standalone side.
 
 ## Soil layers (the same in every column)
 | layer | dz [m] | porosity | field capacity | wilting point | alpha [Pa-1] | n | residual S | k [m2] |

@@ -633,6 +633,7 @@ class HillslopeTests(unittest.TestCase):
             sp = netCDF4.Dataset(pair / "sp_phenol.nc")
             self.assertEqual(float(sp["HTOP"][0, 0, 0, 0]), 25.0)                    # the PFT file's height, not the file's 17 m
             self.assertAlmostEqual(float(sp["HTOP"][0, 5, 0, 0]), 0.8, places=5)
+            self.assertEqual((float(sp["PlantPopuLive_pft"][0, 0, 0]), float(sp["PlantPopuLive_pft"][0, 5, 0])), (0.6, 40.0))   # the coupled path's, not the file's 0.1 and 300
             from ats_ecosim_pairs import namelist as nl
             groups = nl.parse((pair / "standalone.namelist").read_text())
             self.assertEqual(groups["ecosim"]["start_date"], "19810101000000")
@@ -650,6 +651,7 @@ class HillslopeTests(unittest.TestCase):
                 self.assertIn(f'name="column_{c}"', xml)
                 self.assertIn(f'name="snow_depth_c{c}"', xml)
             self.assertNotIn("subsurface properties", xml)
+            self.assertIn('name="visualize ecosim state"', xml)
             self.assertIn('value="19.0"', xml)
             self.assertIn('value="77.0"', xml)
             self.assertIn("zero gradient", xml)
