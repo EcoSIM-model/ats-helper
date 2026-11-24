@@ -306,7 +306,7 @@ def write_climate(path, site, years, template, forcing, wind_height, longwave=No
         d[k][0:n, ...] = v
     d["year"][0:n] = list(years)
     d["Z0G"][0:n, :] = wind_height
-    d["IFLGW"][0:n, :] = 0
+    d["IFLGW"][0:n, :] = 1       # wind reference height above the canopy top, as the coupled path sets it (iFlagRaiseZ0GbyVeg)
     d["ZNOONG"][0:n, :] = site["solar noon [h]"]
     d["PHRG"][0:n, :] = 7.0
     for k in ["CN4RIG", "CNORIG", "CPORG", "CALRG", "CFERG", "CCARG", "CMGRG", "CNARG", "CKARG",
@@ -642,7 +642,7 @@ Start temperature: {start}.
 | forcing | the hourly file the input names; standalone hour J of day d = the record at the start of that hour; precipitation = rain + snow, partitioned by EcoSIM in both runs (ATS variants: "EcoSIM precipitation" = true) |
 | dates | both start on 1 January and run the days of the table with hourly steps |
 | site | latitude and solar noon from the forcing file; soil albedo {cfg['soil_albedo']:g} as hard-coded in the coupled path; no organic matter or litter |
-| wind height | {first['wind']:g} m ({first['wind_source']}; first input); `Z0G` of the standalone climate file |
+| wind height | {first['wind']:g} m ({first['wind_source']}; first input); `Z0G` of the standalone climate file, with `IFLGW` = 1: measured above the canopy top, as the coupled path always does |
 
 ## Not matched
 - **Calendar labels:** the forcing file has a 365-day calendar, ATS takes start year {int(first['site']['start year'])} from it, and the standalone years are labelled {years[0]} and {years[-1]} (non-leap) so that both runs see the same days. Only the label and the GHG record of the year differ.
