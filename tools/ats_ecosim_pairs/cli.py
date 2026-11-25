@@ -53,6 +53,12 @@ def _add_pair(p):
     p.add_argument("--longwave", choices=["ats"], default=None, help="give the standalone the sky longwave ATS computes")
     p.add_argument("--population", nargs="*", default=[], metavar="TEST|PFT|GROUP=VALUE",
                    help="living population [plants m-2], for example shrub=2 or pft_shrub_lai1=2")
+    p.add_argument("--pft-file", help="PFT parameter file for the microbe pairs, when the input's own is not in the EcoSIM tree")
+    p.add_argument("--build", choices=["auto", "fork", "merged"], default="auto",
+                   help="microbe pairs: the features of the executables (default auto: read from --ecosim-src and --ats-src, "
+                        "which must be the trees they were built from)")
+    p.add_argument("--start-day", default="auto", metavar="auto|input|N",
+                   help="microbe pairs: day of year [0-364] both models start on (auto: 0 on a merged build, the input's on a fork build)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and write nothing")
 
 
@@ -127,8 +133,32 @@ def _options(args):
             "wind_height": args.wind_height, "longwave": args.longwave}
 
 
+def _is_microbe_case(case):
+    """True if the inputs of the case have the microbial model on (the microbe pairs, see microbe.py)"""
+    from . import microbe, xmledit
+    flags = [microbe.is_microbe_input(xmledit.parse_xml(p.read_text()).getroot()) for p in sorted(case.root.glob("*.xml"))]
+    if any(flags) and not all(flags):
+        raise case_mod.CaseError("the case mixes inputs with and without the microbial model; keep them in separate folders")
+    return bool(flags) and all(flags)                         # a namelist-only case (a hillslope) has no input to ask
+
+
 def do_pair(case, args, only):
     from . import pairs                                       # needs numpy, h5py, netCDF4
+    if _is_microbe_case(case):
+        from . import microbe
+        try:
+            opts = {"build": args.build, "start_day": args.start_day}
+            if args.pft_file:
+                opts["pft_file_path"] = args.pft_file
+            if args.layers != case_mod.OPTIONS["layers"]:       # the vegetation pairs' defaults do not apply here
+                opts["layers"] = args.layers
+            if args.top_dz != case_mod.OPTIONS["top_dz"]:
+                opts["top_dz"] = args.top_dz
+            microbe.generate_pairs(case, opts, args.ecosim_src, only, args.dry_run, args.ats_src)
+        except (case_mod.CaseError, FileNotFoundError) as err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        return 0
     populations = {}
     for item in args.population:
         key, _, value = item.partition("=")
@@ -165,6 +195,9 @@ def do_run(case, args, only, backends, summarize=False):
 
 
 def do_report(case, args, only):
+    if _is_microbe_case(case):
+        from . import report_microbe                          # needs numpy, h5py, netCDF4, matplotlib
+        return report_microbe.build_report(case, only, args.out)
     from . import report, report_bare, report_hill            # needs numpy, h5py, netCDF4, matplotlib
     status = 0
     tests = case.tests(only, kind="xml")

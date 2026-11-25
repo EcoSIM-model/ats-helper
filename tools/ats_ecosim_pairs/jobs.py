@@ -39,7 +39,11 @@ def build_jobs(case, backend, only=None, ats_exe="ats", np=1, standalone_exe=DEF
                 if require_inputs:
                     raise FileNotFoundError(f"{namelist} not found; write it with the 'pair' command first")
                 continue
-            hours = int(re.search(r"stop_n\s*=\s*(\d+)", namelist.read_text()).group(1)) * 24
+            meta = case.meta(test.name)
+            if meta and meta.get("kind") == "microbe":      # the namelist's stop_n counts from 1 January of the start year
+                hours = int(meta["ndays"]) * 24
+            else:
+                hours = int(re.search(r"stop_n\s*=\s*(\d+)", namelist.read_text()).group(1)) * 24
             jobs.append(Job(test.name, "standalone", [standalone_exe, "../standalone.namelist"],
                             pair / "standalone", expected_hours=hours))
     return jobs

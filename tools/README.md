@@ -32,6 +32,56 @@ Python packages and, once the build is done, the `exodus` wrapper the ATS meshin
 host, `pair` and `report` need `pip install -r tools/requirements.txt` and an `exodus` wrapper on `PYTHONPATH`;
 `run` and `summarize` need only the standard library but must be where the executables are.
 
+## Microbe pairs
+
+A case folder whose inputs have `microbe model` = true (`cases/microbe_bgc_box`, `cases/microbe_bgc_column`) is
+handled by `tools/ats_ecosim_pairs/microbe.py` instead of the vegetation pairs; the commands are the same:
+
+    python tools/ats_pairs.py all cases/microbe_bgc_box    --container NAME     # 30-day two-cell incubation
+    python tools/ats_pairs.py all cases/microbe_bgc_column --container NAME     # one year, 17 transported species
+
+`pair` keeps the input's mesh and forcing (constants, or a daily table that ATS interpolates linearly, rebuilt as the
+hourly climate the standalone reads) and writes the standalone case with the same layers, soil, organic matter
+(`20 exp(-0.3 L)` as the coupled start-up), litter and calendar. `report` writes `pairs/report/<test>.html`: the
+environment, microbial biomass and its depth structure, the ATS functional groups, the dissolved solutes and gases of
+both models, and a section on **production and transport**: for ATS the change of each species' inventory against the
+cumulative EcoSIM source (the difference is what the water flux carried across the boundaries), against the
+standalone's own gas exchange. The pair README lists what is not matched.
+
+Limits of the fork's standalone EcoSIM that shape these pairs (all verified, see `pairs/README.md` of a pair):
+
+- It has 20 layer slots (`JZ = 20`), so an input with more than 19 layers is regraded in **both** models (default
+  19 layers, top layer 0.1 m: a 0.05 m top layer gave a 1.9 m bottom layer on which the ATS column lost its timestep).
+- It has no prescribed-phenology input, so a pair is plant-free in both models (the ATS variant sets
+  `prescribe phenology` false). `sp_phenol_in` exists only in the pinned `standalone_match` EcoSIM
+  (`microbe.MICROBE_OPTIONS["sp_phenol_input"]`).
+- It ignores the grid's `CNH4`, `CNO3` and `CPO4` with the microbial model on: its mineral nitrogen and phosphorus start
+  at zero, and its microbial biomass starts from the soil organic carbon (hundreds of times the ATS seed).
+- A run that starts mid-year counts `stop_n` from 1 January (the namelist writes start day + run length), and a history
+  file that spans a year change is never closed (one file per day is written).
+- `XRADH` (longwave) is read in MJ m-2 h-1 without conversion (`xradh_factor`); the box gets no `XRADH` and air
+  saturated at the air temperature, because the ATS box has no surface energy exchange and any longwave given to the
+  standalone heated its soil by 17-20 K through microbial heat.
+- ATS visualizes the biomass only when the EcoSIM PK has `visualize ecosim state`; the pair adds it.
+
+**Builds.** `pair` adapts to the build the executables come from, read from the EcoSIM and ATS source trees
+(`--ecosim-src`, `--ats-src`: they must be the trees the executables were built from) or forced with
+`--build fork|merged`; the choice is printed and recorded in `pair.json`. For the **merged** build (EcoSIM with the
+restructured microbial model and the semi-implicit surface heat exchange of ATS) the generated ATS variant, never your
+input, gets: the surface energy `source key` `surface-ecosim_source_linearized` with `semi-implicit surface heat exchange`
+true (or false where the input has no surface energy source); 8 heterotrophic guilds; at least 5 soil layers (EcoSIM's
+snow code indexes `AREA_3D(3, L, ...)` with the snow layer past a column of fewer soil layers, so the 2-cell box becomes
+5 cells of 0.2 m); and EcoSIM's calendar starting on day 0 (`--start-day`: the merged standalone stops on its energy check
+when it starts mid-year, and the input forcing starts on 1 January; the site and calendar parameters of the PK may be given
+as values or as sublists read from an hourly forcing file, and both forms are read). The standalone gets `Acetate_vr` for
+`acetate_vr` and longwave in W m-2. The merged standalone has `sp_phenol_in`, but its driver turns the microbial model off
+whenever prescribed phenology is on (`EcoSIMAPI.F90`), so a microbe pair stays plant-free in both models.
+
+The inputs name `ecosim_pftpar_20261014.nc`; where it is not in the EcoSIM tree `ecosim_pftpar_20261021.nc` is used
+(`--pft-file` chooses another) and copied into the pair. The pairs were made and checked on both a build of the
+unmerged `agraus/ecosim_transport` and `agraus/microbe_model` (`--build fork`) and on one of the merged `*_pinned` branches.
+The pairs folder holds one build's results at a time: it is rewritten (including the standalone output) by `pair`.
+
 ## What `pair` reads and changes
 
 Read from each input: the generated single-column mesh (depth), the run length, the van Genuchten soil, porosity,
